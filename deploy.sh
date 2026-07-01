@@ -2,6 +2,17 @@
 # Exit immediately if a command exits with a non-zero status
 set -e
 
+# Add common Windows installation paths for gcloud to PATH if not already present
+if ! command -v gcloud &> /dev/null; then
+    USER_PROFILE_PATH="/c/Users/adnan/AppData/Local/Google Cloud SDK/google-cloud-sdk/bin"
+    PROGRAM_FILES_PATH="/c/Program Files (x86)/Google/Cloud SDK/google-cloud-sdk/bin"
+    if [ -d "$USER_PROFILE_PATH" ]; then
+        export PATH="$PATH:$USER_PROFILE_PATH"
+    elif [ -d "$PROGRAM_FILES_PATH" ]; then
+        export PATH="$PATH:$PROGRAM_FILES_PATH"
+    fi
+fi
+
 PROJECT_ID="project-32e06b00-613b-416f-a3a"
 SERVICE_NAME="internship-tracker"
 REGION="us-central1"

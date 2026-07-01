@@ -1,0 +1,2 @@
+timestamp,cpu_time_sec,gpu_time_sec,speedup,dataset_size_rows,gpu_active
+2026-07-01 11:08:35,8.591248,0.4643917837837838,18.5,100000,False

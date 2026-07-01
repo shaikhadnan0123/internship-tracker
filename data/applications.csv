@@ -1,0 +1,12 @@
+application_id,company,role,date_applied,platform,status,job_description
+APP001,Google,Software Engineering Intern,2026-06-26,Referral,Interviewing,"Looking for a software engineer intern with strong python, flask, and cloud experience. SQL and machine learning is a plus."
+APP002,Nvidia,AI Developer Intern,2026-06-21,Wellfound,Applied,"NVIDIA is looking for an intern to work on GPU acceleration. Experience with python, pandas, machine learning, and cuda is desired."
+APP003,Meta,Production Engineer Intern,2026-06-17,LinkedIn,Applied,"production engineering intern. experience in python, sql, systems, cloud, and infrastructure."
+APP004,Stripe,Software Engineer Intern,2026-06-29,Email,Rejected,"software engineering intern. python, flask, web development, postgresql, APIs."
+APP005,Zomato,Data Analyst Intern,2026-05-25,Internshala,Applied,"data analyst intern. sql, python, pandas, powerbi, dashboards, excel."
+APP006,Microsoft,Software Intern,2026-06-30,LinkedIn,Applied,"software developer intern. C#, .NET, Azure cloud, sql server, software architecture."
+APP007,Amazon,Cloud Support Intern,2026-06-10,Referral,Interviewing,"cloud support engineer intern. AWS, gcp, networking, python, scripting, linux."
+APP008,Netflix,ML Intern,2026-06-24,Wellfound,Rejected,"machine learning engineer intern. python, PyTorch, tensorflow, bigquery, SQL."
+APP009,Flipkart,SDE Intern,2026-06-15,Internshala,Applied,"software development engineer intern. Java, Spring Boot, microservices, SQL, software engineering."
+APP010,OpenAI,Research Intern,2026-06-28,Email,Applied,"research engineer intern. python, machine learning, large language models, GPU, PyTorch."
+APP011,Netflix,Software Engineer Intern,2026-07-01,Referral,Applied,"Must have strong Python, Flask, BigQuery experience."

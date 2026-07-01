@@ -1,0 +1,12 @@
+application_id,company,role,date_applied,platform,status,job_description,days_since_applied,urgency_score,platform_score,role_match_score,status_bonus,priority_score
+APP001,Google,Software Engineering Intern,2026-06-26,Referral,Interviewing,"Looking for a software engineer intern with strong python, flask, and cloud experience. SQL and machine learning is a plus.",5,40,25,25,10,100
+APP002,Nvidia,AI Developer Intern,2026-06-21,Wellfound,Applied,"NVIDIA is looking for an intern to work on GPU acceleration. Experience with python, pandas, machine learning, and cuda is desired.",10,40,20,15,0,75
+APP008,Netflix,ML Intern,2026-06-24,Wellfound,Rejected,"machine learning engineer intern. python, PyTorch, tensorflow, bigquery, SQL.",7,40,20,20,-5,75
+APP003,Meta,Production Engineer Intern,2026-06-17,LinkedIn,Applied,"production engineering intern. experience in python, sql, systems, cloud, and infrastructure.",14,40,15,15,0,70
+APP004,Stripe,Software Engineer Intern,2026-06-29,Email,Rejected,"software engineering intern. python, flask, web development, postgresql, APIs.",2,30,25,20,-5,70
+APP011,Netflix,Software Engineer Intern,2026-07-01,Referral,Applied,"Must have strong Python, Flask, BigQuery experience.",0,30,25,15,0,70
+APP007,Amazon,Cloud Support Intern,2026-06-10,Referral,Interviewing,"cloud support engineer intern. AWS, gcp, networking, python, scripting, linux.",21,20,25,15,10,70
+APP010,OpenAI,Research Intern,2026-06-28,Email,Applied,"research engineer intern. python, machine learning, large language models, GPU, PyTorch.",3,30,25,10,0,65
+APP006,Microsoft,Software Intern,2026-06-30,LinkedIn,Applied,"software developer intern. C#, .NET, Azure cloud, sql server, software architecture.",1,30,15,20,0,65
+APP009,Flipkart,SDE Intern,2026-06-15,Internshala,Applied,"software development engineer intern. Java, Spring Boot, microservices, SQL, software engineering.",16,20,10,10,0,40
+APP005,Zomato,Data Analyst Intern,2026-05-25,Internshala,Applied,"data analyst intern. sql, python, pandas, powerbi, dashboards, excel.",37,5,10,20,0,35

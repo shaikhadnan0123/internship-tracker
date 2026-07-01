@@ -1,0 +1,25 @@
+# Python virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# GCP and Local credentials / environment variables
+*.json
+!.github/**/*.json
+.env
+.env.*
+
+# Local data (optional: you can track applications.csv if you want it versioned,
+# but we ignore local credentials and environments)

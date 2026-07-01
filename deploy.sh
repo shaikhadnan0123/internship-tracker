@@ -29,8 +29,8 @@ echo "Setting GCP project config..."
 gcloud config set project "$PROJECT_ID"
 
 # Submit build to Cloud Build
-echo "Building and pushing container image to GCR via Cloud Build..."
-IMAGE_TAG="gcr.io/$PROJECT_ID/$SERVICE_NAME:latest"
+echo "Building and pushing container image to Artifact Registry via Cloud Build..."
+IMAGE_TAG="$REGION-docker.pkg.dev/$PROJECT_ID/$SERVICE_NAME/image:latest"
 gcloud builds submit --tag "$IMAGE_TAG"
 
 # Deploy container image to Cloud Run

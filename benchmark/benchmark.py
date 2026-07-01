@@ -6,55 +6,94 @@ import numpy as np
 import pandas as pd
 
 def run_heavy_operations():
-    """Generates synthetic data and runs typical pandas pipeline operations."""
-    # Seed for reproducibility
-    np.random.seed(42)
-    n_rows = 100000
+    """Runs heavy data operations on postings.csv if available, otherwise on synthetic data."""
+    csv_path = "data/postings.csv"
     
-    companies = ["Google", "Meta", "Nvidia", "Netflix", "Amazon", "Microsoft", "Stripe", "OpenAI", "Zomato", "Flipkart"]
-    roles = ["Software Engineer Intern", "Data Scientist Intern", "ML Engineer Intern", "Cloud Support Intern", "Frontend Intern"]
-    platforms = ["LinkedIn", "Wellfound", "Referral", "Email", "Internshala", "Indeed"]
-    statuses = ["Applied", "Interviewing", "Rejected", "Offer"]
+    if os.path.exists(csv_path):
+        print(f"Loading real dataset {csv_path}...")
+        # To make it fast and prevent OOM in restricted containers, we can load a chunk (e.g. 500,000 rows)
+        df = pd.read_csv(csv_path, nrows=500000)
+        
+        t0 = time.time()
+        
+        # Op 1: GroupBy and aggregation on location/experience level
+        df["formatted_experience_level"] = df["formatted_experience_level"].fillna("Unknown")
+        df["location"] = df["location"].fillna("Unknown")
+        agg_df = df.groupby(["formatted_experience_level", "location"]).agg({
+            "views": ["mean", "max", "count"],
+            "applies": ["mean", "max"]
+        })
+        
+        # Op 2: Filtering and Sorting on views/applies
+        filtered_df = df[(df["views"] > 10) & (df["applies"] > 5)]
+        sorted_df = filtered_df.sort_values(by=["company_name", "views"], ascending=[True, False])
+        
+        # Op 3: Self Join / Merge (simulating matching jobs)
+        merged_df = pd.merge(
+            df.head(10000),
+            df.tail(10000),
+            on="location",
+            suffixes=("_left", "_right")
+        )
+        
+        # Op 4: Element-wise String search for Python/Engineer in description
+        df["has_python"] = df["description"].fillna("").str.lower().str.contains("python")
+        df["is_engineer"] = df["title"].fillna("").str.lower().str.contains("engineer")
+        
+        t1 = time.time()
+        elapsed = t1 - t0
+        return elapsed
+        
+    else:
+        # Seed for reproducibility
+        np.random.seed(42)
+        n_rows = 100000
+        
+        companies = ["Google", "Meta", "Nvidia", "Netflix", "Amazon", "Microsoft", "Stripe", "OpenAI", "Zomato", "Flipkart"]
+        roles = ["Software Engineer Intern", "Data Scientist Intern", "ML Engineer Intern", "Cloud Support Intern", "Frontend Intern"]
+        platforms = ["LinkedIn", "Wellfound", "Referral", "Email", "Internshala", "Indeed"]
+        statuses = ["Applied", "Interviewing", "Rejected", "Offer"]
 
-    # Generate synthetic DataFrame
-    df = pd.DataFrame({
-        "company": np.random.choice(companies, n_rows),
-        "role": np.random.choice(roles, n_rows),
-        "platform": np.random.choice(platforms, n_rows),
-        "status": np.random.choice(statuses, n_rows),
-        "priority_score": np.random.randint(0, 100, n_rows),
-        "urgency_score": np.random.randint(0, 40, n_rows),
-        "role_match_score": np.random.randint(0, 25, n_rows)
-    })
+        # Generate synthetic DataFrame
+        df = pd.DataFrame({
+            "company": np.random.choice(companies, n_rows),
+            "role": np.random.choice(roles, n_rows),
+            "platform": np.random.choice(platforms, n_rows),
+            "status": np.random.choice(statuses, n_rows),
+            "priority_score": np.random.randint(0, 100, n_rows),
+            "urgency_score": np.random.randint(0, 40, n_rows),
+            "role_match_score": np.random.randint(0, 25, n_rows)
+        })
 
-    t0 = time.time()
+        t0 = time.time()
 
-    # Op 1: Complex GroupBy and aggregations
-    agg_df = df.groupby(["platform", "status"]).agg({
-        "priority_score": ["mean", "max", "min", "count"],
-        "urgency_score": ["mean", "std"],
-        "role_match_score": ["mean"]
-    })
+        # Op 1: Complex GroupBy and aggregations
+        agg_df = df.groupby(["platform", "status"]).agg({
+            "priority_score": ["mean", "max", "min", "count"],
+            "urgency_score": ["mean", "std"],
+            "role_match_score": ["mean"]
+        })
 
-    # Op 2: Complex Filtering & Sorting
-    filtered_df = df[(df["priority_score"] > 50) & (df["status"] != "Rejected")]
-    sorted_df = filtered_df.sort_values(by=["company", "priority_score"], ascending=[True, False])
+        # Op 2: Complex Filtering & Sorting
+        filtered_df = df[(df["priority_score"] > 50) & (df["status"] != "Rejected")]
+        sorted_df = filtered_df.sort_values(by=["company", "priority_score"], ascending=[True, False])
 
-    # Op 3: Self Join / Merge (simulating duplicate/overlap detection)
-    merged_df = pd.merge(
-        df.head(20000), 
-        df.tail(20000), 
-        on="company", 
-        suffixes=("_left", "_right")
-    )
+        # Op 3: Self Join / Merge (simulating duplicate/overlap detection)
+        merged_df = pd.merge(
+            df.head(20000), 
+            df.tail(20000), 
+            on="company", 
+            suffixes=("_left", "_right")
+        )
 
-    # Op 4: Column element-wise string and numeric manipulations
-    df["label"] = df["company"].str.upper() + " - " + df["role"].str.lower()
-    df["scaled_score"] = df["priority_score"].apply(lambda x: x * 1.5 if x > 80 else x * 0.8)
+        # Op 4: Column element-wise string and numeric manipulations
+        df["label"] = df["company"].str.upper() + " - " + df["role"].str.lower()
+        df["scaled_score"] = df["priority_score"].apply(lambda x: x * 1.5 if x > 80 else x * 0.8)
 
-    t1 = time.time()
-    elapsed = t1 - t0
-    return elapsed
+        t1 = time.time()
+        elapsed = t1 - t0
+        return elapsed
+
 
 def main():
     args = sys.argv[1:]

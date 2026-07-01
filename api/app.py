@@ -41,6 +41,13 @@ def home():
         }
     }), 200
 
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.datetime.now().isoformat()
+    }), 200
+
 @app.route("/api/applications", methods=["GET"])
 def get_applications():
     # Attempt to query from BigQuery first

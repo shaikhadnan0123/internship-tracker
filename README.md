@@ -1,6 +1,8 @@
 # Internship Application Tracker & Prioritizer
 **Gen AI Academy APAC Edition — Challenge 2**
 
+**Live Deployed API URL**: [https://internship-tracker-686235651620.us-central1.run.app](https://internship-tracker-686235651620.us-central1.run.app)
+
 A data-driven pipeline and API to ingest, clean, score, rank, and prioritize internship applications. Integrates Google Cloud (BigQuery, Cloud Run) and NVIDIA GPU acceleration (`cudf.pandas`).
 
 ## Technology Stack
@@ -87,6 +89,7 @@ python api/app.py
 | Endpoint | Method | Description |
 |---|---|---|
 | `/` | GET | API status and endpoint directory |
+| `/health` | GET | Live API container health check status |
 | `/api/applications` | GET | Retrieve all scored applications (reads from BigQuery; falls back to local CSV) |
 | `/api/applications` | POST | Add a new application, run the pipeline, and sync to BigQuery |
 | `/api/top?n=5` | GET | Retrieve the top `n` prioritised applications to act on today |

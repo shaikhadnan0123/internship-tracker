@@ -32,21 +32,21 @@ jobs:
 
       - name: Configure Docker Auth
         run: |
-          gcloud auth configure-docker --quiet
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
       - name: Build and Push Docker Image
         run: |
-          IMAGE_TAG="gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+          IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:${{ github.sha }}"
           docker build -t "$IMAGE_TAG" .
           docker push "$IMAGE_TAG"
           # Also tag as latest
-          docker tag "$IMAGE_TAG" "gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest"
-          docker push "gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest"
+          docker tag "$IMAGE_TAG" "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:latest"
+          docker push "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:latest"
 
       - name: Deploy to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v1
         with:
           service: ${{ env.SERVICE_NAME }}
-          image: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:${{ github.sha }}
           region: ${{ env.REGION }}
           flags: --allow-unauthenticated

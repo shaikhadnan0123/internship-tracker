@@ -280,4 +280,4 @@ def run_benchmark():
 if __name__ == "__main__":
     # Start flask application
     # Listening on 0.0.0.0 to enable access from docker/host
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=False)

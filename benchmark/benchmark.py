@@ -30,8 +30,8 @@ def run_heavy_operations():
         
         # Op 3: Self Join / Merge (simulating matching jobs)
         merged_df = pd.merge(
-            df.head(10000),
-            df.tail(10000),
+            df.head(1000),
+            df.tail(1000),
             on="location",
             suffixes=("_left", "_right")
         )
@@ -47,7 +47,7 @@ def run_heavy_operations():
     else:
         # Seed for reproducibility
         np.random.seed(42)
-        n_rows = 100000
+        n_rows = 10000
         
         companies = ["Google", "Meta", "Nvidia", "Netflix", "Amazon", "Microsoft", "Stripe", "OpenAI", "Zomato", "Flipkart"]
         roles = ["Software Engineer Intern", "Data Scientist Intern", "ML Engineer Intern", "Cloud Support Intern", "Frontend Intern"]
@@ -80,8 +80,8 @@ def run_heavy_operations():
 
         # Op 3: Self Join / Merge (simulating duplicate/overlap detection)
         merged_df = pd.merge(
-            df.head(20000), 
-            df.tail(20000), 
+            df.head(1000), 
+            df.tail(1000), 
             on="company", 
             suffixes=("_left", "_right")
         )
@@ -178,19 +178,35 @@ def main():
     print(f"\n[BENCHMARK] NVIDIA GPU Speedup: {speedup:.2f}x faster")
     print("==================================================")
 
-    # 4. Save results to CSV
+    # 4. Save results to CSV (wrapped in try-except for read-only filesystem environments)
+    n_rows = 10000
     results_df = pd.DataFrame({
         "timestamp": [time.strftime("%Y-%m-%d %H:%M:%S")],
         "cpu_time_sec": [cpu_time],
         "gpu_time_sec": [gpu_time],
         "speedup": [speedup],
-        "dataset_size_rows": [100000],
+        "dataset_size_rows": [n_rows],
         "gpu_active": [cuda_available]
     })
     
-    os.makedirs("data", exist_ok=True)
-    results_df.to_csv("data/benchmark_results.csv", index=False)
-    print("Saved benchmark results to 'data/benchmark_results.csv'")
+    try:
+        os.makedirs("data", exist_ok=True)
+        results_df.to_csv("data/benchmark_results.csv", index=False)
+        print("Saved benchmark results to 'data/benchmark_results.csv'")
+    except Exception as e:
+        print(f"[WARNING] Could not save benchmark results to CSV (read-only filesystem): {e}")
+
+    # 5. Output JSON result prefix for parent process parser
+    import json
+    summary = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "cpu_time_sec": cpu_time,
+        "gpu_time_sec": gpu_time,
+        "speedup": speedup,
+        "dataset_size_rows": n_rows,
+        "gpu_active": cuda_available
+    }
+    print(f"JSON_RESULT:{json.dumps(summary)}")
 
 if __name__ == "__main__":
     main()

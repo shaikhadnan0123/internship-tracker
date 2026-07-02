@@ -241,22 +241,39 @@ def get_benchmark():
 def run_benchmark():
     try:
         import subprocess
+        import json
         python_exe = sys.executable
         print("Running benchmark from Flask API...")
         process = subprocess.run([python_exe, "benchmark/benchmark.py"], capture_output=True, text=True)
-        print("Benchmark output:", process.stdout)
         
-        if os.path.exists(CSV_BENCHMARK):
-            import pandas as pd
-            df = pd.read_csv(CSV_BENCHMARK)
-            records = df.to_dict(orient="records")
+        # Parse stdout for JSON_RESULT:
+        result_data = None
+        for line in process.stdout.split("\n"):
+            if line.startswith("JSON_RESULT:"):
+                json_str = line.split("JSON_RESULT:")[1]
+                result_data = json.loads(json_str)
+                break
+                
+        if result_data:
             return jsonify({
                 "status": "success",
                 "message": "Benchmark completed successfully!",
-                "results": records[0] if records else {}
+                "results": result_data
             }), 200
         else:
-            return jsonify({"error": "Benchmark ran but results file not found."}), 500
+            # Fallback to file reading if JSON print is missing
+            print("Failed to find JSON_RESULT in stdout, falling back to CSV file...")
+            if os.path.exists(CSV_BENCHMARK):
+                import pandas as pd
+                df = pd.read_csv(CSV_BENCHMARK)
+                records = df.to_dict(orient="records")
+                return jsonify({
+                    "status": "success",
+                    "message": "Benchmark completed successfully! (CSV Fallback)",
+                    "results": records[0] if records else {}
+                }), 200
+            else:
+                return jsonify({"error": "Failed to parse benchmark results from script output."}), 500
     except Exception as e:
         return jsonify({"error": f"Failed to run benchmark: {str(e)}"}), 500
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Camera, MapPin, Loader2, AlertCircle, Edit3, Plus, Trash, Check, X, Award, Briefcase, GraduationCap } from 'lucide-react';
+import { Camera, MapPin, Loader2, AlertCircle, Edit3, Plus, Trash, Check, X, Award, Briefcase, GraduationCap, FileUp } from 'lucide-react';
 import AiIcon from './AiIcon';
+import { secureFetch } from '../firebase';
 import { Profile, Experience, Education } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -52,8 +53,101 @@ export default function ProfileView({ profile, onUpdateProfile, connectionsCount
   } | null>(null);
   const [aiError, setAiError] = useState('');
   const [showAiCoach, setShowAiCoach] = useState(false);
+  const [aiSuccessMessage, setAiSuccessMessage] = useState('');
 
   // Handlers
+  const handleProfileResumeUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    
+    const allowedExtensions = ['.pdf', '.docx', '.txt'];
+    const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    
+    if (!allowedExtensions.includes(fileExtension)) {
+      setAiError("Invalid file type. Only PDF, Word (.docx), and Text (.txt) are supported.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const result = event.target?.result as string;
+      if (!result) {
+        setAiError("Failed to read file.");
+        return;
+      }
+      
+      const base64Data = result.split(',')[1];
+      setIsAiLoading(true);
+      setAiError('');
+      setAiSuccessMessage('');
+      
+      try {
+        const response = await secureFetch('/api/ai/parse-resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileBase64: base64Data,
+            fileName: file.name,
+            fileMimeType: file.type
+          })
+        });
+        
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || 'Failed to parse resume');
+        }
+        
+        const data = await response.json();
+        const parsed = data.parsedProfile;
+        
+        if (parsed) {
+          const updatedProfile = {
+            ...profile,
+            name: parsed.name || profile.name,
+            headline: parsed.headline || profile.headline,
+            location: parsed.location || profile.location || 'San Francisco, CA',
+            about: parsed.about || profile.about,
+            skills: parsed.skills && parsed.skills.length > 0 ? parsed.skills : profile.skills,
+            experience: parsed.experience && parsed.experience.length > 0 ? parsed.experience.map((exp: any, i: number) => ({
+              id: `exp_${Date.now()}_${i}`,
+              company: exp.company || 'Unknown',
+              role: exp.role || 'Developer',
+              duration: exp.duration || 'N/A',
+              description: exp.description || ''
+            })) : profile.experience,
+            education: parsed.education && parsed.education.length > 0 ? parsed.education.map((edu: any, i: number) => ({
+              id: `edu_${Date.now()}_${i}`,
+              school: edu.school || 'Unknown College',
+              degree: edu.degree || 'Degree',
+              duration: edu.duration || 'N/A'
+            })) : profile.education
+          };
+          
+          onUpdateProfile(updatedProfile);
+          
+          setHeaderForm({
+            name: updatedProfile.name,
+            headline: updatedProfile.headline,
+            location: updatedProfile.location
+          });
+          setAboutForm(updatedProfile.about);
+          
+          setAiSuccessMessage("🎉 Profile successfully parsed and imported from your resume!");
+          setTimeout(() => setAiSuccessMessage(''), 8000);
+        } else {
+          throw new Error("No parsed profile data returned.");
+        }
+      } catch (err: any) {
+        console.error(err);
+        setAiError(err.message || 'Failed to import resume. Please ensure the file contains clear text.');
+      } finally {
+        setIsAiLoading(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleSaveHeader = () => {
     onUpdateProfile({
       ...profile,
@@ -138,7 +232,7 @@ export default function ProfileView({ profile, onUpdateProfile, connectionsCount
     setAiError('');
     setAiSuggestions(null);
     try {
-      const response = await fetch('/api/ai/optimize-profile', {
+      const response = await secureFetch('/api/ai/optimize-profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ profile })
@@ -173,6 +267,23 @@ export default function ProfileView({ profile, onUpdateProfile, connectionsCount
     <div className="grid grid-cols-1 md:grid-cols-4 gap-4" id="ln-profile-container">
       {/* Left 3 Columns: Profile timeline */}
       <div className="md:col-span-3 flex flex-col gap-4">
+        {aiSuccessMessage && (
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-xl flex justify-between items-center text-xs font-bold uppercase tracking-wider animate-fadeIn shadow-2xs">
+            <span>{aiSuccessMessage}</span>
+            <button onClick={() => setAiSuccessMessage('')} className="text-emerald-500 hover:text-emerald-700 font-extrabold cursor-pointer">✕</button>
+          </div>
+        )}
+
+        {aiError && (
+          <div className="bg-rose-50 border border-rose-200 text-rose-800 p-4 rounded-xl flex justify-between items-center text-xs font-bold uppercase tracking-wider animate-fadeIn shadow-2xs">
+            <span className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-500" />
+              {aiError}
+            </span>
+            <button onClick={() => setAiError('')} className="text-rose-500 hover:text-rose-700 font-extrabold cursor-pointer">✕</button>
+          </div>
+        )}
+
         {/* Profile Card Header */}
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm p-6 flex flex-col sm:flex-row items-center sm:items-start gap-6 relative" id="ln-profile-card-header">
           {/* Rearranged Profile Avatar */}
@@ -251,6 +362,30 @@ export default function ProfileView({ profile, onUpdateProfile, connectionsCount
           </div>
 
           <div className="flex flex-col gap-2 shrink-0 self-center sm:self-start w-full sm:w-auto">
+            <input 
+              type="file" 
+              id="profile-resume-input" 
+              className="hidden" 
+              accept=".pdf,.docx,.txt" 
+              onChange={handleProfileResumeUpload} 
+            />
+            <button 
+              onClick={() => document.getElementById('profile-resume-input')?.click()}
+              disabled={isAiLoading}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] uppercase tracking-wider py-2 px-5 rounded-full flex items-center justify-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50 transition-colors w-full sm:w-auto"
+            >
+              {isAiLoading ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Importing...</span>
+                </>
+              ) : (
+                <>
+                  <FileUp className="w-3.5 h-3.5" />
+                  <span>Import from Resume</span>
+                </>
+              )}
+            </button>
             <button 
               onClick={handleRequestAiOptimization}
               disabled={isAiLoading}

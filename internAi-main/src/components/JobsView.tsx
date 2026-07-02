@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Briefcase, MapPin, Building2, AlertCircle, Loader2, CheckCircle, FileText, ArrowLeft } from 'lucide-react';
 import AiIcon from './AiIcon';
+import { secureFetch } from '../firebase';
 import { Job, Profile } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -35,7 +36,7 @@ export default function JobsView({ jobs, profile, onApplyJob, searchQuery }: Job
     setIsAiLoading(true);
     setAiError('');
     try {
-      const response = await fetch('/api/ai/cover-letter', {
+      const response = await secureFetch('/api/ai/cover-letter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

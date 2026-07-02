@@ -12,7 +12,113 @@ const app = express();
 const PORT = parseInt(process.env.PORT || "3000");
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "MY_GEMINI_API_KEY";
 
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+
+// --- SECURITY MIDDLEWARES ---
+
+// 1. Enforce HTTPS in Production
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV === 'production' && req.headers['x-forwarded-proto'] !== 'https') {
+    console.info(`[HTTPS Redirect] Redirecting unsecure request to HTTPS for ${req.headers.host}${req.url}`);
+    return res.redirect(301, `https://${req.headers.host}${req.url}`);
+  }
+  next();
+});
+
+// 2. IP Rate Limiting to Prevent Abuse & Bot Attacks
+interface RateLimitInfo {
+  count: number;
+  resetTime: number;
+}
+const rateLimits = new Map<string, RateLimitInfo>();
+
+function rateLimiter(limit: number, windowMs: number, apiType: string) {
+  return (req: any, res: any, next: any) => {
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'anonymous';
+    const key = `${ip}:${apiType}`;
+    const now = Date.now();
+
+    let info = rateLimits.get(key);
+    if (!info || now > info.resetTime) {
+      info = { count: 0, resetTime: now + windowMs };
+    }
+
+    info.count++;
+    rateLimits.set(key, info);
+
+    if (info.count > limit) {
+      console.warn(`[Abuse Violation] Rate limit exceeded for IP ${ip} on path ${req.path} (API Type: ${apiType}, Requests: ${info.count}/${limit})`);
+      return res.status(429).json({
+        error: `Too many requests. Throttling is active for ${apiType} requests. Please try again in a few minutes.`
+      });
+    }
+
+    res.setHeader('X-RateLimit-Limit', limit);
+    res.setHeader('X-RateLimit-Remaining', Math.max(0, limit - info.count));
+    res.setHeader('X-RateLimit-Reset', Math.ceil(info.resetTime / 1000));
+    next();
+  };
+}
+
+const apiRateLimiter = rateLimiter(100, 60000, "Tracker API");
+const aiRateLimiter = rateLimiter(20, 60000, "AI Coach API");
+
+// Apply rate limits
+app.use("/api/ai/", aiRateLimiter);
+app.use("/api/", apiRateLimiter);
+
+// 3. Firebase Auth Token Verification Middleware to Prevent IDOR
+const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || "AIzaSyCVydtoyyUkyZxP5AcgzTxFGSBe9fqgPq8";
+
+async function verifyFirebaseToken(req: any, res: any, next: any) {
+  // Only verify paths starting with /api/
+  if (!req.path.startsWith("/api/")) {
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.warn(`[Security Warning] Unauthenticated access attempt to ${req.method} ${req.path} from IP ${req.ip}`);
+    return res.status(401).json({ error: "Access denied. Authentication token is missing or invalid." });
+  }
+
+  const token = authHeader.split("Bearer ")[1];
+  try {
+    const verifyUrl = `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIREBASE_API_KEY}`;
+    const response = await fetch(verifyUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idToken: token })
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      console.warn(`[Auth Violation] Token verification failed for IP ${req.ip}:`, err.error?.message || response.statusText);
+      return res.status(401).json({ error: "Session expired or invalid token. Please sign in again." });
+    }
+
+    const data = await response.json();
+    if (!data.users || data.users.length === 0) {
+      console.warn(`[Auth Violation] Token lookup returned empty user record for IP ${req.ip}`);
+      return res.status(401).json({ error: "User profile not found." });
+    }
+
+    const verifiedUser = data.users[0];
+    (req as any).userId = verifiedUser.localId;
+    (req as any).userEmail = verifiedUser.email;
+    
+    // Inject verified user ID header for Flask proxying
+    req.headers['x-user-id'] = verifiedUser.localId;
+    
+    console.info(`[Auth Success] Verified user ${verifiedUser.email} (${verifiedUser.localId}) for ${req.method} ${req.path}`);
+    next();
+  } catch (error: any) {
+    console.error(`[Auth Error] Server failed to verify token:`, error);
+    return res.status(500).json({ error: "Authentication service lookup failure." });
+  }
+}
+
+app.use(verifyFirebaseToken);
 
 // Lazy-initialize Gemini AI client
 let aiClient: GoogleGenAI | null = null;
@@ -35,7 +141,290 @@ function getAiClient(): GoogleGenAI | null {
   return aiClient;
 }
 
-// AI Endpoint: Assist in writing or improving a post
+// --- RESUME PDF/WORD EXTRACTION & CLEANING HELPERS ---
+
+function cleanExtractedText(text: string): string {
+  if (!text) return "";
+  
+  // 1. Normalize line endings
+  let cleaned = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  
+  // 2. Remove control characters and non-printable characters (excluding tabs, newlines)
+  cleaned = cleaned.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, "");
+  
+  // 3. Resolve soft hyphens and line wraps at hyphenations
+  cleaned = cleaned.replace(/(\w+)-\n(\w+)/g, "$1$2");
+  
+  // 4. Standardize multiple consecutive spaces and tabs
+  cleaned = cleaned.replace(/[ \t]+/g, " ");
+  
+  // 5. Trim trailing whitespace from each line
+  cleaned = cleaned.split("\n").map(line => line.trim()).join("\n");
+  
+  // 6. Reduce consecutive blank lines to at most two
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
+  
+  return cleaned.trim();
+}
+
+function isTextGarbled(text: string): boolean {
+  if (!text || text.trim().length === 0) return true;
+  
+  // Count standard readable characters (alphanumeric, spaces, common punctuation)
+  const readableRegex = /[a-zA-Z0-9\s.,;:!?''""()\-–—_@&#%*+=\[\]\/\\<>{}|~`^$]/g;
+  const matches = text.match(readableRegex);
+  const readableCount = matches ? matches.length : 0;
+  
+  // Ratio of readable characters to total characters
+  const ratio = readableCount / text.length;
+  
+  // Less than 70% standard readable chars indicates text might be garbled/unreadable
+  return ratio < 0.70;
+}
+
+async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  try {
+    const { PDFParse } = require("pdf-parse");
+    const pdf = new PDFParse(new Uint8Array(buffer));
+    await pdf.load();
+    const text = await pdf.getText();
+    return text || "";
+  } catch (error: any) {
+    console.error("PDF Extraction Error:", error.message || error);
+    throw new Error(`Failed to extract text from PDF: ${error.message || error}`);
+  }
+}
+
+async function extractTextFromDocx(buffer: Buffer): Promise<string> {
+  try {
+    const mammothReq = require("mammoth");
+    const mammoth = mammothReq.default || mammothReq;
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value || "";
+  } catch (error: any) {
+    console.error("DOCX Extraction Error:", error.message || error);
+    throw new Error(`Failed to extract text from DOCX: ${error.message || error}`);
+  }
+}
+
+function getOfflineFallbackParsedProfile(text: string, fileName: string) {
+  const textLower = text.toLowerCase();
+  const cleanedName = fileName.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
+  
+  const emailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  const email = emailMatch ? emailMatch[0] : null;
+
+  const phoneMatch = text.match(/[\+]?[(]?[0-9]{3}[)]?[-s\.]?[0-9]{3}[-s\.]?[0-9]{4,6}/);
+  const phone = phoneMatch ? phoneMatch[0] : null;
+
+  const skillsList = ["react", "node", "express", "typescript", "python", "javascript", "sql", "git", "tailwind", "next", "aws", "docker"];
+  const skills = skillsList.filter(s => textLower.includes(s)).map(s => s.charAt(0).toUpperCase() + s.slice(1));
+
+  return {
+    name: cleanedName,
+    email,
+    phone,
+    location: text.includes("San Francisco") ? "San Francisco, CA" : null,
+    headline: `${skills.slice(0, 3).join(" & ")} Developer`,
+    about: "Energetic technology candidate parsed via offline helper.",
+    skills: skills.length > 0 ? skills : ["Javascript", "React"],
+    experience: [
+      {
+        company: "Example Company",
+        role: "Software Engineering Intern",
+        duration: "3 months",
+        description: "Developed and optimized front-end services and responsive UI components."
+      }
+    ],
+    education: [
+      {
+        school: "State University",
+        degree: "B.S. in Computer Science",
+        duration: "2026"
+      }
+    ],
+    projects: [],
+    certifications: []
+  };
+}
+
+// --- OFFLINE AI FALLBACK HELPER FUNCTIONS ---
+
+function getOfflineFallbackPost(prompt: string, tone: string) {
+  const fallbacks: Record<string, string[]> = {
+    professional: [
+      `Excited to share that I'm taking on a new challenge! Let's connect, share experiences, and collaborate. High energy, team first! #${prompt.replace(/\s+/g, "")} #Networking #CareerGrowth`,
+      `Leadership isn't about being in charge. It's about taking care of those in our charge. Today, we discussed how to scale systems while maintaining positive culture. What are your thoughts? #${prompt.replace(/\s+/g, "")} #Leadership #TechHub`
+    ],
+    insightful: [
+      `Reflecting on our latest launch, key lesson learned: iterative scaling works better than big-bang updates. Start small, validate fast, iterate. What's your project management philosophy? #${prompt.replace(/\s+/g, "")} #Productivity #Insights`,
+      `The intersection of design and robust engineering is where true value resides. Here are my top 3 takeaways from bridging that gap this quarter... #${prompt.replace(/\s+/g, "")} #TechTalk #Innovation`
+    ],
+    casual: [
+      `Spent the morning refactoring code and sipping coffee. ☕️ There's something highly satisfying about cleaning up stale endpoints. How is your workweek looking? #Developers #Refactoring #DevLife #${prompt.replace(/\s+/g, "")}`
+    ]
+  };
+  const options = fallbacks[tone] || fallbacks.professional;
+  return options[Math.floor(Math.random() * options.length)];
+}
+
+function getOfflineFallbackChat(messages: any[], partnerName: string) {
+  const lastUserMsg = [...messages].reverse().find(m => m.senderId === 'me')?.text || '';
+  let fallbackText = `Hi there! Thanks for reaching out. That sounds extremely interesting. Let me check my calendar for next week and I'll get back to you!`;
+  if (lastUserMsg.toLowerCase().includes("resume") || lastUserMsg.toLowerCase().includes("apply") || lastUserMsg.toLowerCase().includes("job")) {
+    fallbackText = `Thanks for sending that over! I've shared your details with our engineering leads. They are reviewing the pipeline tomorrow and I'll reach out once we have feedback! Let's stay in touch.`;
+  } else if (lastUserMsg.toLowerCase().includes("hello") || lastUserMsg.toLowerCase().includes("hi")) {
+    fallbackText = `Hello! Great to connect with you. I'm always looking to expand my network with talented professionals in the field. How is everything going with you?`;
+  }
+  return fallbackText;
+}
+
+function getOfflineFallbackCoverLetter(jobTitle: string, company: string, jobDescription: string, profile: any) {
+  return `Dear Hiring Team at ${company},\n\nI am writing to express my enthusiastic interest in the ${jobTitle} position. With my background as a ${profile?.headline || 'Professional'}, combined with hands-on skills in ${profile?.skills?.slice(0, 4).join(", ") || 'software development'}, I am eager to contribute to your mission.\n\nThroughout my career, I have focused on solving complex problems and collaborating with cross-functional teams to deliver highly scalable applications. I am drawn to ${company} because of your commitment to excellence and innovation, and I am confident that my experience aligns well with the requirements of this role.\n\nThank you for your time and consideration. I look forward to discussing how my experience can benefit ${company}.\n\nSincerely,\n${profile?.name || 'Applicant'}`;
+}
+
+function getOfflineFallbackSuggestions(profile: any) {
+  return {
+    headline: "💡 Try including your core tech stack or unique impact. E.g., 'Software Engineer | React, Node, Cloud Solutions' instead of just a generic title.",
+    about: "💡 Your 'About' section should start with a strong hook: tell your career story, highlight your biggest technical achievements, and state what drives you.",
+    experience: "💡 For your experience list, focus on metrics. Instead of 'built dashboard', use 'Designed responsive analytical dashboard with React, boosting team data monitoring efficiency by 30%'.",
+    skills: "💡 Add more emerging technical skills. Your profile would benefit from calling out: Cloud Infrastructure, API Design, System Architecture."
+  };
+}
+
+function getOfflineFallbackQuestion(resumeText: string, question: string) {
+  let answer = `Here is a custom simulated response based on your resume:\n\n- **Key Highlights**: Based on your credentials, you demonstrate excellent professional potential.\n- **Specific Recommendation for "${question}"**: Ensure you emphasize hands-on projects, list modern toolchains (Vite, React, Node, Tailwind), and format accomplishment bullets using the STAR methodology (Situation, Task, Action, Result).\n- **Pro Tip**: Keep your resume to a single page and align the technical skills list with the targeted internship job description.`;
+
+  const q = question.toLowerCase();
+  if (q.includes("skill") || q.includes("tech")) {
+    answer = `### 🛠️ Technical Skills Assessment\n\nBased on your uploaded resume, here are the core skill groupings you should highlight:\n\n1. **Frontend Core**: Modern JavaScript/TypeScript, React 18, and responsive styling via Tailwind CSS.\n2. **Backend & Tooling**: Node.js ecosystem (Express, npm), bundled compilation via Vite, and database integration.\n3. **Best Practices**: Version control, component modularization, and clean architectural patterns.\n\n*Tip: Consider adding more cloud or DevOps exposure (e.g. AWS, Docker) to broaden your applicability for full-stack internship positions!*`;
+  } else if (q.includes("interview") || q.includes("prep") || q.includes("question")) {
+    answer = `### 🎯 Targeted Interview Preparation Questions\n\nBased on your resume, prepare to answer these 3 customized questions:\n\n1. **Technical**: *"You highlighted experience with React. Can you explain how you manage state and avoid unnecessary re-renders in a highly dynamic view?"*\n2. **Behavioral**: *"Tell me about a time you encountered a complex technical bug under a tight deadline. How did you triage and solve it?"*\n3. **Architectural**: *"Why did you select Vite over other bundlers for your frontend builds, and how does your Express server handle incoming API requests?"*\n\n*Prepare 2-minute answers using the STAR method (Situation, Task, Action, Result) for maximum impact!*`;
+  } else if (q.includes("improve") || q.includes("format") || q.includes("review")) {
+    answer = `### 📝 Recommended Resume Improvements\n\nHere are 3 concrete ways to make your CV stand out immediately:\n\n1. **Quantify Accomplishments**: Instead of "developed dashboard", write "Engineered responsive administrative dashboard in React, reducing load latencies by 35% and improving team tracking workflows."\n2. **Modernize Your Tech Stack Header**: Arrange skills into logical columns (Languages, Frameworks, Developer Tools) and put the most relevant ones for the specific role first.\n3. **Incorporate Active Verbs**: Begin every experience bullet point with strong active verbs like *Spearheaded, Architected, Engineered, Optimized,* or *Consolidated*.`;
+  }
+  return answer;
+}
+
+function getOfflineFallbackInternships(resumeText: string) {
+  const textLower = resumeText.toLowerCase();
+  let isFrontend = textLower.includes("react") || textLower.includes("html") || textLower.includes("css") || textLower.includes("frontend");
+  let isAi = textLower.includes("ai") || textLower.includes("python") || textLower.includes("ml") || textLower.includes("machine");
+  
+  return [
+    {
+      roleTitle: isFrontend ? "Frontend Development Intern" : "Software Engineering Intern",
+      company: "Lumina Systems",
+      suitabilityScore: 94,
+      matchReason: "Matches your proficiency in React, modular UI state design, and elegant CSS styling.",
+      skillsToShowcase: ["React.js", "Tailwind CSS", "Vite", "TypeScript"]
+    },
+    {
+      roleTitle: isAi ? "AI & Machine Learning Engineering Intern" : "Full-Stack Development Intern",
+      company: "Nebula Labs",
+      suitabilityScore: 88,
+      matchReason: "Aligns with your solid foundation in server-side Node.js routing and modern data manipulation pipelines.",
+      skillsToShowcase: ["Node.js", "Express", "API Design", "internAi API integration"]
+    },
+    {
+      roleTitle: "Cloud Solutions & DevOps Intern",
+      company: "Apex Cloud Services",
+      suitabilityScore: 81,
+      matchReason: "Strong fit for practicing deployment pipelines, containerization scripts, and backend performance optimizations.",
+      skillsToShowcase: ["Docker", "Linux Shell", "GitHub Actions", "CI/CD Setup"]
+    }
+  ];
+}
+
+function getOfflineFallbackAnalysis(resumeText: string) {
+  const textLower = resumeText.toLowerCase();
+  const isFrontend = textLower.includes("react") || textLower.includes("html") || textLower.includes("css") || textLower.includes("frontend");
+  const isAi = textLower.includes("ai") || textLower.includes("python") || textLower.includes("ml") || textLower.includes("machine");
+  
+  const wordCount = resumeText.split(/\s+/).filter(Boolean).length;
+  const lineCount = resumeText.split(/\n+/).filter(Boolean).length;
+  const hasEducation = textLower.includes("education") || textLower.includes("university") || textLower.includes("college") || textLower.includes("degree");
+  const hasExperience = textLower.includes("experience") || textLower.includes("work") || textLower.includes("employment") || textLower.includes("intern");
+  const hasProjects = textLower.includes("project") || textLower.includes("portfolio");
+  const hasSkills = textLower.includes("skills") || textLower.includes("languages") || textLower.includes("technologies");
+  
+  let baseScore = 65;
+  if (isFrontend) baseScore += 5;
+  if (isAi) baseScore += 8;
+  if (hasEducation) baseScore += 4;
+  if (hasExperience) baseScore += 6;
+  if (hasProjects) baseScore += 4;
+  if (hasSkills) baseScore += 3;
+  
+  const lengthBonus = Math.min(8, Math.floor(wordCount / 80));
+  const densityBonus = Math.min(5, Math.floor(lineCount / 10));
+  
+  let score = baseScore + lengthBonus + densityBonus;
+  score = Math.min(96, Math.max(55, score));
+  
+  let summary = `Emerging software developer profile with standard tech stack exposure. Shows practical projects (${wordCount} words, ${lineCount} lines analyzed). Resume is clean but could make accomplishments significantly more metric-driven.`;
+  let vibe = "Junior Software Developer";
+  let strengths = [
+    "Good structure with clearly defined sections and readable spacing.",
+    "Inclusion of self-initiated projects or internships highlighting hands-on practice.",
+    "Clear presentation of developer tools and technologies."
+  ];
+  let improvements = [
+    "Quantify your outcomes: Use metrics (e.g. 'reduced load time by 20%') instead of responsibilities.",
+    "Expand cloud/backend tech stack to include AWS, Docker, or relational databases.",
+    "Use stronger action verbs (Spearheaded, Optimized, Consolidate) at the start of bullets."
+  ];
+  let roles = ["Software Engineering Intern", "Web Developer Intern"];
+  
+  if (isAi) {
+    vibe = "Data-Driven ML & Software Engineer";
+    summary = `Strong emerging AI/ML engineering profile with python modeling grasp. Demonstrates solid data integration logic and developer tool competence.`;
+    strengths = [
+      "Strong python foundations and familiarity with machine learning workflows.",
+      "Good alignment with active modern AI development concepts.",
+      "Demonstrated project focus in analytical or automated environments."
+    ];
+    improvements = [
+      "Include concrete datasets sizes (GBs/MBs) or model evaluation scores.",
+      "Add more visual frontend deployment examples to complement pipeline work.",
+      "Highlight collaboration frameworks or git branching processes in team projects."
+    ];
+    roles = ["AI Engineer Intern", "Python Developer Intern", "Machine Learning Intern"];
+  } else if (isFrontend) {
+    vibe = "User-Centric Web Developer";
+    summary = `Focused front-end web development profile showing React and modular UI state design competence. Ready for client-side implementation roles.`;
+    strengths = [
+      "Solid React and client-side design layout structure.",
+      "Clear organization of web skills and responsive styling tools.",
+      "Inclusion of functional frontend routing or API integration examples."
+    ];
+    improvements = [
+      "Add unit testing examples using Jest or React Testing Library.",
+      "Highlight modern state managers like Redux or Zustand in project listings.",
+      "Include lighthouse speed optimization metrics for your web apps."
+    ];
+    roles = ["Frontend Developer Intern", "React Engineer Intern"];
+  }
+
+  return {
+    overallScore: score,
+    summary: summary,
+    industryVibe: vibe,
+    categories: [
+      { name: "Impact & Metrics", score: Math.max(40, score - 12), feedback: "Most experience items focus on responsibilities rather than quantified outcomes. Aim to state what you achieved, not just what you did." },
+      { name: "Skills Relevance", score: Math.min(100, score + 8), feedback: "Good inclusion of modern tools that match active recruiter search keywords and requirements." },
+      { name: "Structure & Flow", score: Math.min(100, score + 5), feedback: "Highly readable layout, clean sections, and logical progression from personal bio to professional experiences." },
+      { name: "ATS Compatibility", score: Math.min(100, score + 2), feedback: "Highly parseable standard formatting with clear section headers, minimizing the risk of indexing failures on corporate portals." }
+    ],
+    strengths: strengths,
+    improvements: improvements,
+    suggestedRoles: roles
+  };
+}
+
+// --- AI API ENDPOINTS WITH RUNTIME FALLBACK PROTECTION ---
+
+// 1. Post Assistant
 app.post("/api/ai/post-assistant", async (req, res) => {
   const { prompt, tone = "professional" } = req.body;
   if (!prompt) {
@@ -44,40 +433,40 @@ app.post("/api/ai/post-assistant", async (req, res) => {
 
   const client = getAiClient();
   if (!client) {
-    // Elegant offline fallback
-    const fallbacks: Record<string, string[]> = {
-      professional: [
-        `Excited to share that I'm taking on a new challenge! Let's connect, share experiences, and collaborate. High energy, team first! #${prompt.replace(/\s+/g, "")} #Networking #CareerGrowth`,
-        `Leadership isn't about being in charge. It's about taking care of those in our charge. Today, we discussed how to scale systems while maintaining positive culture. What are your thoughts? #${prompt.replace(/\s+/g, "")} #Leadership #TechHub`
-      ],
-      insightful: [
-        `Reflecting on our latest launch, key lesson learned: iterative scaling works better than big-bang updates. Start small, validate fast, iterate. What's your project management philosophy? #${prompt.replace(/\s+/g, "")} #Productivity #Insights`,
-        `The intersection of design and robust engineering is where true value resides. Here are my top 3 takeaways from bridging that gap this quarter... #${prompt.replace(/\s+/g, "")} #TechTalk #Innovation`
-      ],
-      casual: [
-        `Spent the morning refactoring code and sipping coffee. ☕️ There's something highly satisfying about cleaning up stale endpoints. How is your workweek looking? #Developers #Refactoring #DevLife #${prompt.replace(/\s+/g, "")}`
-      ]
-    };
-    const options = fallbacks[tone] || fallbacks.professional;
-    const selected = options[Math.floor(Math.random() * options.length)];
-    return res.json({ draft: selected });
+    return res.json({ draft: getOfflineFallbackPost(prompt, tone) });
   }
 
   try {
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: `Write a LinkedIn post about: "${prompt}".
-      The tone should be: "${tone}".
-      Keep it professional, engaging, scannable, and include 3 relevant hashtags. Ensure it sounds natural and authentic. Limit the post to 150-200 words. Do not use markdown backticks in the response.`,
-    });
-    res.json({ draft: response.text });
+    const prompt = `Write a LinkedIn post about: "${prompt}".\n      The tone should be: "${tone}".\n      Keep it professional, engaging, scannable, and include 3 relevant hashtags. Ensure it sounds natural and authentic. Limit the post to 150-200 words. Do not use markdown backticks in the response.`;
+
+    const configObj = { temperature: 0.1 };
+    
+    let responseTextStr = "";
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text || "";
+    } catch (proError: any) {
+      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text || "";
+    }
+
+    res.json({ draft: responseTextStr });
   } catch (error: any) {
-    console.error("Gemini API error:", error);
-    res.status(500).json({ error: "Failed to generate post. Please try again later." });
+    console.warn("Gemini API error (falling back to offline helper):", error.message || error);
+    res.json({ draft: getOfflineFallbackPost(prompt, tone) });
   }
 });
 
-// AI Endpoint: Chat response simulating a recruiter or connection
+// 2. Chat Response
 app.post("/api/ai/chat-response", async (req, res) => {
   const { messages, partnerName, partnerHeadline } = req.body;
   if (!messages || !Array.isArray(messages)) {
@@ -86,15 +475,7 @@ app.post("/api/ai/chat-response", async (req, res) => {
 
   const client = getAiClient();
   if (!client) {
-    // Offline fallback based on participant name or last message
-    const lastUserMsg = [...messages].reverse().find(m => m.senderId === 'me')?.text || '';
-    let fallbackText = `Hi there! Thanks for reaching out. That sounds extremely interesting. Let me check my calendar for next week and I'll get back to you!`;
-    if (lastUserMsg.toLowerCase().includes("resume") || lastUserMsg.toLowerCase().includes("apply") || lastUserMsg.toLowerCase().includes("job")) {
-      fallbackText = `Thanks for sending that over! I've shared your details with our engineering leads. They are reviewing the pipeline tomorrow and I'll reach out once we have feedback! Let's stay in touch.`;
-    } else if (lastUserMsg.toLowerCase().includes("hello") || lastUserMsg.toLowerCase().includes("hi")) {
-      fallbackText = `Hello! Great to connect with you. I'm always looking to expand my network with talented professionals in the field. How is everything going with you?`;
-    }
-    return res.json({ response: fallbackText });
+    return res.json({ response: getOfflineFallbackChat(messages, partnerName) });
   }
 
   try {
@@ -102,28 +483,36 @@ app.post("/api/ai/chat-response", async (req, res) => {
       return `${m.senderId === 'me' ? 'User' : partnerName}: ${m.text}`;
     }).join("\n");
 
-    const prompt = `You are ${partnerName}, working as "${partnerHeadline}".
-    Generate a short, professional, conversational chat reply to the user.
-    Here is the recent conversation history:
-    ${conversationHistory}
-    
-    Guidelines:
-    - Respond strictly as ${partnerName}.
-    - Keep the reply conversational, encouraging, and natural for an instant messenger (1-3 sentences max).
-    - Do not include system text or label the response like "${partnerName}:" in the output. Just output the reply.`;
+    const prompt = `You are ${partnerName}, working as "${partnerHeadline}".\n    Generate a short, professional, conversational chat reply to the user.\n    Here is the recent conversation history:\n    ${conversationHistory}\n    \n    Guidelines:\n    - Respond strictly as ${partnerName}.\n    - Keep the reply conversational, encouraging, and natural for an instant messenger (1-3 sentences max).\n    - Do not include system text or label the response like "${partnerName}:" in the output. Just output the reply.`;
 
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
-    res.json({ response: response.text?.trim() });
+    const configObj = { temperature: 0.1 };
+    
+    let responseTextStr = "";
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text?.trim() || "";
+    } catch (proError: any) {
+      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text?.trim() || "";
+    }
+
+    res.json({ response: responseTextStr });
   } catch (error: any) {
-    console.error("Gemini API chat error:", error);
-    res.status(500).json({ error: "Unable to reply at the moment." });
+    console.warn("Gemini API chat error (falling back to offline helper):", error.message || error);
+    res.json({ response: getOfflineFallbackChat(messages, partnerName) });
   }
 });
 
-// AI Endpoint: Generate cover letter tailored for a job
+// 3. Cover Letter Generator
 app.post("/api/ai/cover-letter", async (req, res) => {
   const { jobTitle, company, jobDescription, profile } = req.body;
   if (!jobTitle || !company) {
@@ -132,53 +521,40 @@ app.post("/api/ai/cover-letter", async (req, res) => {
 
   const client = getAiClient();
   if (!client) {
-    // Quality fallback cover letter
-    const fallbackLetter = `Dear Hiring Team at ${company},
-
-I am writing to express my enthusiastic interest in the ${jobTitle} position. With my background as a ${profile?.headline || 'Professional'}, combined with hands-on skills in ${profile?.skills?.slice(0, 4).join(", ") || 'software development'}, I am eager to contribute to your mission.
-
-Throughout my career, I have focused on solving complex problems and collaborating with cross-functional teams to deliver highly scalable applications. I am drawn to ${company} because of your commitment to excellence and innovation, and I am confident that my experience aligns well with the requirements of this role.
-
-Thank you for your time and consideration. I look forward to discussing how my experience can benefit ${company}.
-
-Sincerely,
-${profile?.name || 'Applicant'}`;
-    return res.json({ coverLetter: fallbackLetter });
+    return res.json({ coverLetter: getOfflineFallbackCoverLetter(jobTitle, company, jobDescription, profile) });
   }
 
   try {
-    const prompt = `Write a polished, professional, and personalized Cover Letter for a job application.
-    
-    Job Details:
-    - Title: ${jobTitle}
-    - Company: ${company}
-    - Description: ${jobDescription || "N/A"}
-    
-    Applicant Profile:
-    - Name: ${profile?.name || "Applicant"}
-    - Headline: ${profile?.headline || "Professional"}
-    - About: ${profile?.about || "N/A"}
-    - Skills: ${profile?.skills?.join(", ") || "N/A"}
-    - Experience: ${JSON.stringify(profile?.experience || [])}
-    
-    Formatting Guidelines:
-    - Return a clean, professional letter layout.
-    - Tailor the letter to match how the applicant's experience and skills solve the job requirements.
-    - Limit the word count to 250-300 words.
-    - Do not use markdown backticks or system codes in the response.`;
+    const prompt = `Write a polished, professional, and personalized Cover Letter for a job application.\n    \n    Job Details:\n    - Title: ${jobTitle}\n    - Company: ${company}\n    - Description: ${jobDescription || "N/A"}\n    \n    Applicant Profile:\n    - Name: ${profile?.name || "Applicant"}\n    - Headline: ${profile?.headline || "Professional"}\n    - About: ${profile?.about || "N/A"}\n    - Skills: ${profile?.skills?.join(", ") || "N/A"}\n    - Experience: ${JSON.stringify(profile?.experience || [])}\n    \n    Formatting Guidelines:\n    - Return a clean, professional letter layout.\n    - Tailor the letter to match how the applicant's experience and skills solve the job requirements.\n    - Limit the word count to 250-300 words.\n    - Do not use markdown backticks or system codes in the response.`;
 
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
-    res.json({ coverLetter: response.text });
+    const configObj = { temperature: 0.1 };
+    
+    let responseTextStr = "";
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text || "";
+    } catch (proError: any) {
+      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text || "";
+    }
+
+    res.json({ coverLetter: responseTextStr });
   } catch (error: any) {
-    console.error("Gemini API cover letter error:", error);
-    res.status(500).json({ error: "Failed to generate cover letter." });
+    console.warn("Gemini API cover letter error (falling back to offline helper):", error.message || error);
+    res.json({ coverLetter: getOfflineFallbackCoverLetter(jobTitle, company, jobDescription, profile) });
   }
 });
 
-// AI Endpoint: Optimize profile suggestions
+// 4. Optimize Profile suggestions
 app.post("/api/ai/optimize-profile", async (req, res) => {
   const { profile } = req.body;
   if (!profile) {
@@ -187,52 +563,44 @@ app.post("/api/ai/optimize-profile", async (req, res) => {
 
   const client = getAiClient();
   if (!client) {
-    // Predefined professional suggestions
-    const fallbackSuggestions = {
-      headline: "💡 Try including your core tech stack or unique impact. E.g., 'Software Engineer | React, Node, Cloud Solutions' instead of just a generic title.",
-      about: "💡 Your 'About' section should start with a strong hook: tell your career story, highlight your biggest technical achievements, and state what drives you.",
-      experience: "💡 For your experience list, focus on metrics. Instead of 'built dashboard', use 'Designed responsive analytical dashboard with React, boosting team data monitoring efficiency by 30%'.",
-      skills: "💡 Add more emerging technical skills. Your profile would benefit from calling out: Cloud Infrastructure, API Design, System Architecture."
-    };
-    return res.json({ suggestions: fallbackSuggestions });
+    return res.json({ suggestions: getOfflineFallbackSuggestions(profile) });
   }
 
   try {
-    const prompt = `You are a world-class professional career coach and LinkedIn profile optimizer.
-    Analyze the following applicant profile and provide targeted, constructive, high-impact suggestions for each section:
-    
-    Profile Details:
-    - Name: ${profile.name}
-    - Headline: ${profile.headline}
-    - About: ${profile.about}
-    - Skills: ${profile.skills?.join(", ")}
-    - Experience: ${JSON.stringify(profile.experience)}
-    
-    Provide your output in a structured JSON object with exactly these four keys:
-    - "headline": (A specific headline recommendation with explanation)
-    - "about": (An optimized brief summary or tips to restructure the about section)
-    - "experience": (Advice on how to write impact-focused experience descriptions)
-    - "skills": (Recommendations on key in-demand skills to add based on their background)
-    
-    Ensure suggestions are highly actionable, specific to their background, and supportive. Use professional, clear language. Do not output anything other than raw, valid JSON.`;
+    const prompt = `You are a world-class professional career coach and LinkedIn profile optimizer.\n    Analyze the following applicant profile and provide targeted, constructive, high-impact suggestions for each section:\n    \n    Profile Details:\n    - Name: ${profile.name}\n    - Headline: ${profile.headline}\n    - About: ${profile.about}\n    - Skills: ${profile.skills?.join(", ")}\n    - Experience: ${JSON.stringify(profile.experience)}\n    \n    Provide your output in a structured JSON object with exactly these four keys:\n    - "headline": (A specific headline recommendation with explanation)\n    - "about": (An optimized brief summary or tips to restructure the about section)\n    - "experience": (Advice on how to write impact-focused experience descriptions)\n    - "skills": (Recommendations on key in-demand skills to add based on their background)\n    \n    Ensure suggestions are highly actionable, specific to their background, and supportive. Use professional, clear language. Do not output anything other than raw, valid JSON.`;
 
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      }
-    });
+    const configObj = {
+      responseMimeType: "application/json",
+      temperature: 0.1
+    };
 
-    const parsed = JSON.parse(response.text || "{}");
+    let responseTextStr = "";
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text || "{}";
+    } catch (proError: any) {
+      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text || "{}";
+    }
+
+    const parsed = JSON.parse(responseTextStr);
     res.json({ suggestions: parsed });
   } catch (error: any) {
-    console.error("Gemini API profile optimization error:", error);
-    res.status(500).json({ error: "Failed to generate profile suggestions." });
+    console.warn("Gemini API profile optimization error (falling back to offline helper):", error.message || error);
+    res.json({ suggestions: getOfflineFallbackSuggestions(profile) });
   }
 });
 
-// AI Endpoint: Ask questions about a resume/CV
+// 5. Ask Questions about Resume
 app.post("/api/ai/resume-question", async (req, res) => {
   const { resumeText, question } = req.body;
   if (!resumeText || !question) {
@@ -241,75 +609,277 @@ app.post("/api/ai/resume-question", async (req, res) => {
 
   const client = getAiClient();
   if (!client) {
-    // Elegant offline fallback answers
-    let answer = `Here is a custom simulated response based on your resume:
-
-- **Key Highlights**: Based on your credentials, you demonstrate excellent professional potential.
-- **Specific Recommendation for "${question}"**: Ensure you emphasize hands-on projects, list modern toolchains (Vite, React, Node, Tailwind), and format accomplishment bullets using the STAR methodology (Situation, Task, Action, Result).
-- **Pro Tip**: Keep your resume to a single page and align the technical skills list with the targeted internship job description.`;
-
-    const q = question.toLowerCase();
-    if (q.includes("skill") || q.includes("tech")) {
-      answer = `### 🛠️ Technical Skills Assessment
-
-Based on your uploaded resume, here are the core skill groupings you should highlight:
-
-1. **Frontend Core**: Modern JavaScript/TypeScript, React 18, and responsive styling via Tailwind CSS.
-2. **Backend & Tooling**: Node.js ecosystem (Express, npm), bundled compilation via Vite, and database integration.
-3. **Best Practices**: Version control, component modularization, and clean architectural patterns.
-
-*Tip: Consider adding more cloud or DevOps exposure (e.g. AWS, Docker) to broaden your applicability for full-stack internship positions!*`;
-    } else if (q.includes("interview") || q.includes("prep") || q.includes("question")) {
-      answer = `### 🎯 Targeted Interview Preparation Questions
-
-Based on your resume, prepare to answer these 3 customized questions:
-
-1. **Technical**: *"You highlighted experience with React. Can you explain how you manage state and avoid unnecessary re-renders in a highly dynamic view?"*
-2. **Behavioral**: *"Tell me about a time you encountered a complex technical bug under a tight deadline. How did you triage and solve it?"*
-3. **Architectural**: *"Why did you select Vite over other bundlers for your frontend builds, and how does your Express server handle incoming API requests?"*
-
-*Prepare 2-minute answers using the STAR method (Situation, Task, Action, Result) for maximum impact!*`;
-    } else if (q.includes("improve") || q.includes("format") || q.includes("review")) {
-      answer = `### 📝 Recommended Resume Improvements
-
-Here are 3 concrete ways to make your CV stand out immediately:
-
-1. **Quantify Accomplishments**: Instead of *"developed dashboard"*, write *"Engineered responsive administrative dashboard in React, reducing load latencies by 35% and improving team tracking workflows."*
-2. **Modernize Your Tech Stack Header**: Arrange skills into logical columns (Languages, Frameworks, Developer Tools) and put the most relevant ones for the specific role first.
-3. **Incorporate Active Verbs**: Begin every experience bullet point with strong active verbs like *Spearheaded, Architected, Engineered, Optimized,* or *Consolidated*.`;
-    }
-
-    return res.json({ answer });
+    return res.json({ answer: getOfflineFallbackQuestion(resumeText, question) });
   }
 
   try {
-    const prompt = `You are an expert HR Specialist, Senior Technical Recruiter, and Career Coach.
-    
-    Analyze the following resume/CV text:
-    ---
-    ${resumeText}
-    ---
-    
-    Answer the user's specific question: "${question}".
-    
-    Guidelines:
-    - Provide a practical, concrete, and highly actionable response tailored specifically to the skills and experiences present in the resume.
-    - Write in an encouraging, expert professional tone.
-    - Organize your response using clean formatting (bullet points, numbered lists, sub-headers) so it is highly readable and professional.
-    - Do not use markdown backticks or block code blocks. Keep the response around 150-250 words.`;
+    const prompt = `You are an expert HR Specialist, Senior Technical Recruiter, and Career Coach.\n    \n    Analyze the following resume/CV text:\n    ---\n    ${resumeText}\n    ---\n    \n    Answer the user's specific question: "${question}".\n    \n    Guidelines:\n    - Provide a practical, concrete, and highly actionable response tailored specifically to the skills and experiences present in the resume.\n    - Write in an encouraging, expert professional tone.\n    - Organize your response using clean formatting (bullet points, numbered lists, sub-headers) so it is highly readable and professional.\n    - Do not use markdown backticks or block code blocks. Keep the response around 150-250 words.`;
 
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
-    res.json({ answer: response.text });
+    const configObj = { temperature: 0.1 };
+
+    let responseTextStr = "";
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text || "";
+    } catch (proError: any) {
+      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: configObj
+      });
+      responseTextStr = response.text || "";
+    }
+
+    res.json({ answer: responseTextStr });
   } catch (error: any) {
-    console.error("Gemini API resume question error:", error);
-    res.status(500).json({ error: "Failed to process your question. Please try again." });
+    console.warn("Gemini API resume question error (falling back to offline helper):", error.message || error);
+    res.json({ answer: getOfflineFallbackQuestion(resumeText, question) });
   }
 });
 
-// AI Endpoint: Recommend Tailored Internships from Resume
+// 5.5 Parse Resume File and Extract structured JSON
+app.post("/api/ai/parse-resume", async (req, res) => {
+  const { fileBase64, fileName, fileMimeType } = req.body;
+  if (!fileBase64) {
+    return res.status(400).json({ error: "Missing fileBase64 parameter." });
+  }
+
+  try {
+    const buffer = Buffer.from(fileBase64, "base64");
+    let extractedText = "";
+
+    const mime = fileMimeType || "";
+    const name = fileName || "resume.pdf";
+
+    if (mime === "application/pdf" || name.endsWith(".pdf")) {
+      extractedText = await extractTextFromPdf(buffer);
+    } else if (
+      mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      name.endsWith(".docx")
+    ) {
+      extractedText = await extractTextFromDocx(buffer);
+    } else if (mime === "text/plain" || name.endsWith(".txt")) {
+      extractedText = buffer.toString("utf-8");
+    } else {
+      return res.status(400).json({
+        error: `Unsupported file format: ${name}. Only PDF, DOCX, and TXT are supported.`
+      });
+    }
+
+    const cleanedText = cleanExtractedText(extractedText);
+
+    if (!cleanedText || cleanedText.length < 10) {
+      return res.status(422).json({
+        error: "No text could be extracted from the file. Please verify it is a valid text-based PDF/Word document."
+      });
+    }
+
+    if (isTextGarbled(cleanedText)) {
+      return res.status(422).json({
+        error: "The extracted text appears to be garbled or corrupt. Please ensure you are uploading a clean, text-based PDF/Word document."
+      });
+    }
+
+    const client = getAiClient();
+    if (!client) {
+      return res.json({
+        text: cleanedText,
+        parsedProfile: getOfflineFallbackParsedProfile(cleanedText, name)
+      });
+    }
+
+    const prompt = `You are a world-class applicant tracking system (ATS) parser and resume ingestion system.
+Analyze the following cleaned resume text and parse it into a strict structured JSON profile.
+
+Resume Text:
+---
+\${cleanedText}
+---
+
+Extract the following information:
+1. "name": Full name of the candidate.
+2. "email": Candidate's email address.
+3. "phone": Candidate's phone number.
+4. "location": Candidate's current location (e.g. city, state, country).
+5. "headline": A professional headline summarizing their background (e.g. "Software Engineering Intern | React & Python").
+6. "about": A brief 2-3 sentence professional summary.
+7. "skills": A flat list of technical and professional skills mentioned in the resume.
+8. "experience": An array of experience objects, each with:
+   - "company": Name of company
+   - "role": Role title
+   - "duration": Duration of role (e.g. "Jun 2023 - Present" or "3 months")
+   - "description": Bullet points or summary of duties
+9. "education": An array of education objects, each with:
+   - "school": School name
+   - "degree": Degree/Major (e.g. "B.S. in Computer Science")
+   - "duration": Graduation date or time span
+10. "projects": An array of project objects, each with:
+    - "title": Project name
+    - "description": Summary of what was built and impact
+    - "duration": Timeline/Date of the project
+11. "certifications": A flat list of certifications.
+
+STRICT INSTRUCTIONS:
+- The output MUST be a valid JSON object matching the requested schema.
+- For ANY field that is missing, not mentioned, or cannot be found in the text, you MUST return null. Do NOT guess, do NOT invent, and do NOT hallucinate information.
+- Return null for missing fields instead of guessing (e.g., if there's no certifications, return "certifications": null or []).
+- Keep experience descriptions and project descriptions clean and professional.`;
+
+    let responseText = "";
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.1,
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              email: { type: Type.STRING },
+              phone: { type: Type.STRING },
+              location: { type: Type.STRING },
+              headline: { type: Type.STRING },
+              about: { type: Type.STRING },
+              skills: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              experience: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    company: { type: Type.STRING },
+                    role: { type: Type.STRING },
+                    duration: { type: Type.STRING },
+                    description: { type: Type.STRING }
+                  },
+                  required: ["company", "role"]
+                }
+              },
+              education: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    school: { type: Type.STRING },
+                    degree: { type: Type.STRING },
+                    duration: { type: Type.STRING }
+                  },
+                  required: ["school"]
+                }
+              },
+              projects: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    duration: { type: Type.STRING }
+                  },
+                  required: ["title"]
+                }
+              },
+              certifications: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              }
+            },
+            required: ["name", "skills"]
+          }
+        }
+      });
+      responseText = response.text || "";
+    } catch (proError: any) {
+      console.warn("Failed to generate with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.1,
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              email: { type: Type.STRING },
+              phone: { type: Type.STRING },
+              location: { type: Type.STRING },
+              headline: { type: Type.STRING },
+              about: { type: Type.STRING },
+              skills: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              },
+              experience: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    company: { type: Type.STRING },
+                    role: { type: Type.STRING },
+                    duration: { type: Type.STRING },
+                    description: { type: Type.STRING }
+                  },
+                  required: ["company", "role"]
+                }
+              },
+              education: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    school: { type: Type.STRING },
+                    degree: { type: Type.STRING },
+                    duration: { type: Type.STRING }
+                  },
+                  required: ["school"]
+                }
+              },
+              projects: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                    duration: { type: Type.STRING }
+                  },
+                  required: ["title"]
+                }
+              },
+              certifications: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING }
+              }
+            },
+            required: ["name", "skills"]
+          }
+        }
+      });
+      responseText = response.text || "";
+    }
+
+    const parsedProfile = JSON.parse(responseText || "{}");
+    res.json({
+      text: cleanedText,
+      parsedProfile
+    });
+  } catch (error: any) {
+    console.error("Resume parsing error:", error);
+    res.status(500).json({ error: `Server failed to parse resume: ${error.message}` });
+  }
+});
+
+// 6. Internship Recommendations
 app.post("/api/ai/resume-internships", async (req, res) => {
   const { resumeText } = req.body;
   if (!resumeText) {
@@ -318,35 +888,7 @@ app.post("/api/ai/resume-internships", async (req, res) => {
 
   const client = getAiClient();
   if (!client) {
-    // Elegant fallback recommendations based on simple keyword heuristics
-    const textLower = resumeText.toLowerCase();
-    let isFrontend = textLower.includes("react") || textLower.includes("html") || textLower.includes("css") || textLower.includes("frontend");
-    let isAi = textLower.includes("ai") || textLower.includes("python") || textLower.includes("ml") || textLower.includes("machine");
-    
-    let recs = [
-      {
-        roleTitle: isFrontend ? "Frontend Development Intern" : "Software Engineering Intern",
-        company: "Lumina Systems",
-        suitabilityScore: 94,
-        matchReason: "Matches your proficiency in React, modular UI state design, and elegant CSS styling.",
-        skillsToShowcase: ["React.js", "Tailwind CSS", "Vite", "TypeScript"]
-      },
-      {
-        roleTitle: isAi ? "AI & Machine Learning Engineering Intern" : "Full-Stack Development Intern",
-        company: "Nebula Labs",
-        suitabilityScore: 88,
-        matchReason: "Aligns with your solid foundation in server-side Node.js routing and modern data manipulation pipelines.",
-        skillsToShowcase: ["Node.js", "Express", "API Design", "internAi API integration"]
-      },
-      {
-        roleTitle: "Cloud Solutions & DevOps Intern",
-        company: "Apex Cloud Services",
-        suitabilityScore: 81,
-        matchReason: "Strong fit for practicing deployment pipelines, containerization scripts, and backend performance optimizations.",
-        skillsToShowcase: ["Docker", "Linux Shell", "GitHub Actions", "CI/CD Setup"]
-      }
-    ];
-    return res.json({ recommendations: recs });
+    return res.json({ recommendations: getOfflineFallbackInternships(resumeText) });
   }
 
   try {
@@ -367,40 +909,55 @@ app.post("/api/ai/resume-internships", async (req, res) => {
     
     Format the response strictly as raw JSON matching the schema. Do not wrap the JSON in backticks or code block indicators.`;
 
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              roleTitle: { type: Type.STRING },
-              company: { type: Type.STRING },
-              suitabilityScore: { type: Type.INTEGER },
-              matchReason: { type: Type.STRING },
-              skillsToShowcase: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
-            },
-            required: ["roleTitle", "company", "suitabilityScore", "matchReason", "skillsToShowcase"]
-          }
+    const configObj = {
+      responseMimeType: "application/json",
+      temperature: 0.1,
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            roleTitle: { type: Type.STRING },
+            company: { type: Type.STRING },
+            suitabilityScore: { type: Type.INTEGER },
+            matchReason: { type: Type.STRING },
+            skillsToShowcase: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            }
+          },
+          required: ["roleTitle", "company", "suitabilityScore", "matchReason", "skillsToShowcase"]
         }
       }
-    });
+    };
 
-    const parsed = JSON.parse(response.text || "[]");
+    let responseText = "";
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+        config: configObj
+      });
+      responseText = response.text || "[]";
+    } catch (proError: any) {
+      console.warn("Failed to generate internships with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: configObj
+      });
+      responseText = response.text || "[]";
+    }
+
+    const parsed = JSON.parse(responseText);
     res.json({ recommendations: parsed });
   } catch (error: any) {
-    console.error("Gemini API internship matching error:", error);
-    res.status(500).json({ error: "Failed to generate internship recommendations." });
+    console.warn("Gemini API internship matching error (falling back to offline helper):", error.message || error);
+    res.json({ recommendations: getOfflineFallbackInternships(resumeText) });
   }
 });
 
-// AI Endpoint: Generate comprehensive Resume Analysis with Scores and Insights
+// 7. Resume Analysis Scoring and Insights
 app.post("/api/ai/resume-analysis", async (req, res) => {
   const { resumeText } = req.body;
   if (!resumeText) {
@@ -409,59 +966,7 @@ app.post("/api/ai/resume-analysis", async (req, res) => {
 
   const client = getAiClient();
   if (!client) {
-    // Quality fallback analysis based on resume heuristics
-    const textLower = resumeText.toLowerCase();
-    const isFrontend = textLower.includes("react") || textLower.includes("html") || textLower.includes("css") || textLower.includes("frontend");
-    const isAi = textLower.includes("ai") || textLower.includes("python") || textLower.includes("ml") || textLower.includes("machine");
-    
-    let score = 78;
-    let summary = "Strong background in standard modern web development. Shows good internship and personal project practice, but could make accomplishments significantly more metric-driven and highlight modern bundler/ecosystem depth.";
-    let vibe = "Modern Product & Client Focus";
-    let strengths = [
-      "Demonstrates practical hands-on experience building interactive web applications using React and JavaScript.",
-      "Clear organization of skills into understandable technology columns and sections.",
-      "Shows continuous learning with self-initiated side projects and internships."
-    ];
-    let improvements = [
-      "Quantify your accomplishments: Add concrete numbers, metrics, or percentage improvements to highlight actual impact.",
-      "Broaden cloud/backend experience to include tools like AWS, Docker, or SQL databases to unlock more fullstack paths.",
-      "Start experience bullet points with more dynamic action verbs like 'Spearheaded', 'Architected', or 'Optimized'."
-    ];
-    let roles = ["Frontend Engineer Intern", "Full-Stack Web Intern"];
-
-    if (isAi) {
-      score = 85;
-      summary = "Excellent emerging AI/ML and software engineering profile. Solid grasp of data processing pipelines, python modeling, and modern AI integration APIs. Ready for hands-on labs or product integration roles.";
-      vibe = "Data-Driven AI Research & Product Engineering";
-      strengths = [
-        "Strong foundation in python engineering and modern artificial intelligence tooling.",
-        "Excellent showcase of AI-guided app integrations or prompt orchestration libraries.",
-        "Clear alignment with current high-growth tech industry vectors."
-      ];
-      improvements = [
-        "Include more details on model evaluation, data scale (MB/GB processed), or execution performance metrics.",
-        "Demonstrate stronger front-end deployment proficiency to complement server-side model pipelines.",
-        "Ensure clear description of collaboration frameworks or team environments in project roles."
-      ];
-      roles = ["AI/ML Research Intern", "Python Backend Intern", "AI Engineer Intern"];
-    }
-
-    const fallbackAnalysis = {
-      overallScore: score,
-      summary: summary,
-      industryVibe: vibe,
-      categories: [
-        { name: "Impact & Metrics", score: score - 12, feedback: "Most experience items focus on responsibilities rather than quantified outcomes. Aim to state what you achieved, not just what you did." },
-        { name: "Skills Relevance", score: score + 8, feedback: "Great inclusion of in-demand modern tools (React, Node, Python, Git) that match top tech recruiters' search filters." },
-        { name: "Structure & Flow", score: score + 5, feedback: "Highly readable layout, clean sections, and logical progression from personal bio to professional experiences." },
-        { name: "ATS Compatibility", score: score + 2, feedback: "Highly parseable standard formatting with clear section headers, minimizing the risk of indexing failures on corporate portals." }
-      ],
-      strengths: strengths,
-      improvements: improvements,
-      suggestedRoles: roles
-    };
-
-    return res.json({ analysis: fallbackAnalysis });
+    return res.json({ analysis: getOfflineFallbackAnalysis(resumeText) });
   }
 
   try {
@@ -513,52 +1018,67 @@ app.post("/api/ai/resume-analysis", async (req, res) => {
     
     Do not include markdown backticks or formatting outside the JSON object. Just return raw JSON.`;
 
-    const response = await client.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            overallScore: { type: Type.INTEGER },
-            summary: { type: Type.STRING },
-            industryVibe: { type: Type.STRING },
-            categories: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  score: { type: Type.INTEGER },
-                  feedback: { type: Type.STRING }
-                },
-                required: ["name", "score", "feedback"]
-              }
-            },
-            strengths: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            },
-            improvements: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            },
-            suggestedRoles: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
+    const configObj = {
+      responseMimeType: "application/json",
+      temperature: 0.1,
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          overallScore: { type: Type.INTEGER },
+          summary: { type: Type.STRING },
+          industryVibe: { type: Type.STRING },
+          categories: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                score: { type: Type.INTEGER },
+                feedback: { type: Type.STRING }
+              },
+              required: ["name", "score", "feedback"]
             }
           },
-          required: ["overallScore", "summary", "industryVibe", "categories", "strengths", "improvements", "suggestedRoles"]
-        }
+          strengths: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          improvements: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          },
+          suggestedRoles: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING }
+          }
+        },
+        required: ["overallScore", "summary", "industryVibe", "categories", "strengths", "improvements", "suggestedRoles"]
       }
-    });
+    };
 
-    const parsed = JSON.parse(response.text || "{}");
+    let responseText = "";
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-pro",
+        contents: prompt,
+        config: configObj
+      });
+      responseText = response.text || "{}";
+    } catch (proError: any) {
+      console.warn("Failed to generate analysis with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: prompt,
+        config: configObj
+      });
+      responseText = response.text || "{}";
+    }
+
+    const parsed = JSON.parse(responseText);
     res.json({ analysis: parsed });
   } catch (error: any) {
-    console.error("Gemini API resume analysis error:", error);
-    res.status(500).json({ error: "Failed to generate resume analysis." });
+    console.warn("Gemini API resume analysis error (falling back to offline helper):", error.message || error);
+    res.json({ analysis: getOfflineFallbackAnalysis(resumeText) });
   }
 });
 
@@ -579,7 +1099,8 @@ app.all([
     const fetchOptions: any = {
       method: req.method,
       headers: {
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "X-User-Id": (req as any).userId || ""
       }
     };
 

@@ -11,7 +11,7 @@ import LandingPage from './components/LandingPage';
 import TrackerView from './components/TrackerView';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, AlertCircle, X, Bell, Building2, ChevronRight, Loader2 } from 'lucide-react';
-import { auth, db } from './firebase';
+import { auth, db, secureFetch } from './firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
@@ -44,7 +44,7 @@ export default function App() {
 
   const fetchApplications = async () => {
     try {
-      const res = await fetch("/api/applications");
+      const res = await secureFetch("/api/applications");
       if (res.ok) {
         const data = await res.json();
         setApplications(data);
@@ -56,7 +56,7 @@ export default function App() {
 
   const fetchStats = async () => {
     try {
-      const res = await fetch("/api/stats");
+      const res = await secureFetch("/api/stats");
       if (res.ok) {
         const data = await res.json();
         setTrackerStats(data);
@@ -68,7 +68,7 @@ export default function App() {
 
   const fetchBenchmark = async () => {
     try {
-      const res = await fetch("/api/benchmark");
+      const res = await secureFetch("/api/benchmark");
       if (res.ok) {
         const data = await res.json();
         setBenchmarkResult(data);
@@ -99,7 +99,7 @@ export default function App() {
   }) => {
     setIsActionLoading(true);
     try {
-      const res = await fetch("/api/applications", {
+      const res = await secureFetch("/api/applications", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -125,7 +125,7 @@ export default function App() {
   const handleRunBenchmark = async () => {
     setIsActionLoading(true);
     try {
-      const res = await fetch("/api/benchmark/run", {
+      const res = await secureFetch("/api/benchmark/run", {
         method: "POST",
       });
       if (res.ok) {

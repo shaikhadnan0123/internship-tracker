@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Image, ThumbsUp, MessageSquare, Share2, Send, X, Plus, AlertCircle, Loader2, Briefcase, FileUp, Trash2, TrendingUp, Eye, Users, Award, BarChart3 } from 'lucide-react';
 import AiIcon from './AiIcon';
+import { secureFetch } from '../firebase';
 import { Post, Profile } from '../types';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -103,7 +104,7 @@ export default function Dashboard({
     setIsAnalysisLoading(true);
     setResumeError('');
     try {
-      const response = await fetch('/api/ai/resume-analysis', {
+      const response = await secureFetch('/api/ai/resume-analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resumeText: text })
@@ -183,16 +184,16 @@ Ask me any questions in the chat bar below to tailor or rewrite your sections!`,
   };
 
   const processFile = (file: File) => {
-    const allowedExtensions = ['.pdf', '.docx', '.doc', '.txt', '.png', '.jpeg', '.jpg'];
+    const allowedExtensions = ['.pdf', '.docx', '.txt'];
     const fileExtension = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
     
-    if (!allowedExtensions.includes(fileExtension) && !file.type.startsWith('image/')) {
-      setResumeError("Invalid file type. Only PDF, Word (.docx/.doc), Text (.txt), and Images (.png/.jpeg) are supported.");
+    if (!allowedExtensions.includes(fileExtension)) {
+      setResumeError("Invalid file type. Only PDF, Word (.docx), and Text (.txt) are supported.");
       setChatHistory(prev => [
         ...prev,
         {
           sender: 'assistant',
-          text: `❌ **Upload failed:** "${file.name}" is not a supported file format. Please upload a PDF, Word (.docx/.doc), Text (.txt), or Image (.png/.jpeg) file.`,
+          text: `❌ **Upload failed:** "${file.name}" is not a supported file format. Please upload a PDF, Word (.docx), or Text (.txt) file.`,
           timestamp: new Date()
         }
       ]);
@@ -211,33 +212,64 @@ Ask me any questions in the chat bar below to tailor or rewrite your sections!`,
       }
     ]);
     
-    // If it's a txt file, read it
-    if (file.type === "text/plain" || file.name.endsWith(".txt")) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const text = e.target?.result as string;
-        if (text) {
-          setResumeText(text);
-          fetchInternshipRecommendationsForText(text);
-          fetchResumeAnalysisForText(text, file.name);
-        } else {
-          setResumeError("The uploaded file is empty.");
-        }
-      };
-      reader.readAsText(file);
-    } else {
-      // PDF or DOCX binary parsing simulation
-      const cleanedName = file.name.replace(/\.[^/.]+$/, "").replace(/[_-]/g, " ");
-      const generatedCVText = `Parsed from Uploaded CV: ${file.name}
-Candidate Name: ${cleanedName}
-File Size: ${(file.size / 1024).toFixed(1)} KB
-Summary: Energetic candidate seeking high-impact technology internships. Proficient in engineering web applications and analyzing solutions.
-Keywords: React, Node.js, Express, TypeScript, Python, Javascript, SQL, Git, API Design, Tailwind CSS.`;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const result = event.target?.result as string;
+      if (!result) {
+        setResumeError("Failed to read file.");
+        return;
+      }
       
-      setResumeText(generatedCVText);
-      fetchInternshipRecommendationsForText(generatedCVText);
-      fetchResumeAnalysisForText(generatedCVText, file.name);
-    }
+      const base64Data = result.split(',')[1];
+      
+      setIsAnalysisLoading(true);
+      setResumeError('');
+      
+      try {
+        const response = await secureFetch('/api/ai/parse-resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileBase64: base64Data,
+            fileName: file.name,
+            fileMimeType: file.type
+          })
+        });
+        
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || 'Failed to parse resume');
+        }
+        
+        const data = await response.json();
+        const extractedText = data.text;
+        
+        setResumeText(extractedText);
+        
+        // Trigger recommendations and analysis with the REAL text!
+        fetchInternshipRecommendationsForText(extractedText);
+        fetchResumeAnalysisForText(extractedText, file.name);
+        
+      } catch (err: any) {
+        console.error(err);
+        setResumeError(err.message || 'Failed to extract text from your resume. Please check if the file is a standard PDF/Word document.');
+        
+        setChatHistory(prev => [
+          ...prev,
+          {
+            sender: 'assistant',
+            text: `⚠️ **Parsing failed:** ${err.message || 'Failed to extract text from your resume.'} Please check that the PDF/Word file contains actual selectable text (not scanned images) and is not corrupt.`,
+            timestamp: new Date()
+          }
+        ]);
+        
+        setResumeFileName('');
+        setResumeText('');
+      } finally {
+        setIsAnalysisLoading(false);
+      }
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleDrag = (e: React.DragEvent) => {
@@ -283,7 +315,7 @@ Keywords: React, Node.js, Express, TypeScript, Python, Javascript, SQL, Git, API
     setCustomQuestion('');
     
     try {
-      const response = await fetch('/api/ai/resume-question', {
+      const response = await secureFetch('/api/ai/resume-question', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -321,7 +353,7 @@ Keywords: React, Node.js, Express, TypeScript, Python, Javascript, SQL, Git, API
   const fetchInternshipRecommendationsForText = async (text: string) => {
     setIsInternshipsLoading(true);
     try {
-      const response = await fetch('/api/ai/resume-internships', {
+      const response = await secureFetch('/api/ai/resume-internships', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ resumeText: text })
@@ -382,7 +414,7 @@ Keywords: React, Node.js, Express, TypeScript, Python, Javascript, SQL, Git, API
     setIsAiLoading(true);
     setAiError('');
     try {
-      const response = await fetch('/api/ai/post-assistant', {
+      const response = await secureFetch('/api/ai/post-assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: aiPrompt, tone: aiTone })

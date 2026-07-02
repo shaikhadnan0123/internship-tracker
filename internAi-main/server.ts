@@ -187,8 +187,8 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
     const { PDFParse } = require("pdf-parse");
     const pdf = new PDFParse(new Uint8Array(buffer));
     await pdf.load();
-    const text = await pdf.getText();
-    return text || "";
+    const result = await pdf.getText();
+    return result.text || "";
   } catch (error: any) {
     console.error("PDF Extraction Error:", error.message || error);
     throw new Error(`Failed to extract text from PDF: ${error.message || error}`);

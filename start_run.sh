@@ -1,17 +1,10 @@
 #!/bin/bash
+# Start Flask Backend in the background, streaming output directly to stdout/stderr
 echo "Starting Flask Backend on port 5000..."
-python -u api/app.py > /tmp/flask.log 2>&1 &
-FLASK_PID=$!
+python -u api/app.py &
 
-# Wait 3 seconds to check status
+# Wait 3 seconds to let Flask bind
 sleep 3
-
-if kill -0 $FLASK_PID 2>/dev/null; then
-  echo "Flask Backend started successfully (PID: $FLASK_PID)."
-else
-  echo "ERROR: Flask Backend crashed on startup!"
-  cat /tmp/flask.log
-fi
 
 # Start the Node.js Express React frontend on the Cloud Run PORT in the foreground
 echo "Starting Node.js Express frontend on port $PORT..."

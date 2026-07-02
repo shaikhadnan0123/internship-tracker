@@ -4,24 +4,37 @@ FROM python:3.10-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies if any are needed
+# Install system dependencies, curl, and Node.js
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install python packages
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code
+# Copy package lock and install npm packages
+COPY internAi-main/package*.json ./internAi-main/
+RUN cd internAi-main && npm install
+
+# Copy all application source code
 COPY . .
 
+# Build frontend and Express production bundle
+RUN cd internAi-main && npm run build
+
+# Make the start script executable
+RUN chmod +x start_run.sh
+
 # Set default port and python unbuffered mode
-ENV PORT=5000
+ENV PORT=8080
 ENV PYTHONUNBUFFERED=True
 
-# Expose the application port
-EXPOSE 5000
+# Expose port
+EXPOSE 8080
 
-# Start Gunicorn server binding to $PORT
-CMD gunicorn --bind :$PORT --workers 1 --threads 8 --timeout 0 api.app:app
+# Start Flask and Node servers concurrently
+CMD ["./start_run.sh"]

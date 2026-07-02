@@ -24,3 +24,9 @@ Thumbs.db
 # Local data (optional: you can track applications.csv if you want it versioned,
 # but we ignore local credentials and environments)
 data/postings.csv
+
+# Frontend build and dependencies
+node_modules/
+internAi-main/node_modules/
+internAi-main/dist/
+internAi-main/.firebase/

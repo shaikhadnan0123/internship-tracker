@@ -1,0 +1,14 @@
+.git
+.gitignore
+.gcloudignore
+.github/
+**/__pycache__/
+*.pyc
+venv/
+.venv/
+env/
+node_modules/
+internAi-main/node_modules/
+internAi-main/dist/
+internAi-main/.firebase/
+data/postings.csv

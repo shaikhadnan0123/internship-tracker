@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "hoow-ai"
+  },
+  "targets": {
+    "hoow-ai": {
+      "hosting": {
+        "intern-ai": [
+          "intern-ai-india"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

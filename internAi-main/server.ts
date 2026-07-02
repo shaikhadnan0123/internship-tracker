@@ -437,7 +437,7 @@ app.post("/api/ai/post-assistant", async (req, res) => {
   }
 
   try {
-    const prompt = `Write a LinkedIn post about: "${prompt}".\n      The tone should be: "${tone}".\n      Keep it professional, engaging, scannable, and include 3 relevant hashtags. Ensure it sounds natural and authentic. Limit the post to 150-200 words. Do not use markdown backticks in the response.`;
+    const fullPrompt = `Write a LinkedIn post about: "${prompt}".\n      The tone should be: "${tone}".\n      Keep it professional, engaging, scannable, and include 3 relevant hashtags. Ensure it sounds natural and authentic. Limit the post to 150-200 words. Do not use markdown backticks in the response.`;
 
     const configObj = { temperature: 0.1 };
     
@@ -445,7 +445,7 @@ app.post("/api/ai/post-assistant", async (req, res) => {
     try {
       const response = await client.models.generateContent({
         model: "gemini-2.5-pro",
-        contents: prompt,
+        contents: fullPrompt,
         config: configObj
       });
       responseTextStr = response.text || "";
@@ -453,7 +453,7 @@ app.post("/api/ai/post-assistant", async (req, res) => {
       console.warn("Failed with pro, falling back to flash:", proError.message || proError);
       const response = await client.models.generateContent({
         model: "gemini-2.5-flash",
-        contents: prompt,
+        contents: fullPrompt,
         config: configObj
       });
       responseTextStr = response.text || "";

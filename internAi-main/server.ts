@@ -563,7 +563,7 @@ app.post("/api/ai/resume-analysis", async (req, res) => {
 });
 
 // Proxy middleware to forward API calls to the Flask backend (Port 5000)
-const FLASK_BACKEND_URL = process.env.FLASK_BACKEND_URL || "http://localhost:5000";
+const FLASK_BACKEND_URL = process.env.FLASK_BACKEND_URL || "http://127.0.0.1:5000";
 
 app.all([
   "/api/applications",

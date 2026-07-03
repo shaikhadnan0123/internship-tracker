@@ -1,4 +1,11 @@
 #!/bin/bash
+
+# Generate a cryptographically secure random internal token if not set in the environment
+if [ -z "$INTERNAL_AUTH_TOKEN" ]; then
+  echo "Generating secure internal API authorization token..."
+  export INTERNAL_AUTH_TOKEN=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
+fi
+
 # Start Flask Backend in the background, streaming output directly to stdout/stderr
 echo "Starting Flask Backend on port 5000..."
 python -u api/app.py &

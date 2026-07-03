@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { AlertCircle, ArrowLeft, Loader2 } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Loader2, CheckCircle2 } from 'lucide-react';
 import { auth, db } from '../firebase';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 
 interface LoginFormProps {
@@ -15,11 +15,14 @@ export function LoginForm({ onSubmit, onToggleToSignUp, onCancel }: LoginFormPro
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [infoMessage, setInfoMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setInfoMessage('');
 
     if (!email.trim() || !password.trim()) {
       setError('Please fill in both email and password.');
@@ -29,6 +32,14 @@ export function LoginForm({ onSubmit, onToggleToSignUp, onCancel }: LoginFormPro
     setLoading(true);
     try {
       const cred = await signInWithEmailAndPassword(auth, email.trim(), password.trim());
+      
+      // Enforce email verification check on client side
+      if (!cred.user.emailVerified) {
+        setError('Your email address is not verified. Please check your inbox for the verification link.');
+        setLoading(false);
+        return;
+      }
+
       // Retrieve profile details from Firestore
       const docRef = doc(db, 'users', cred.user.uid);
       const docSnap = await getDoc(docRef);
@@ -47,6 +58,31 @@ export function LoginForm({ onSubmit, onToggleToSignUp, onCancel }: LoginFormPro
     }
   };
 
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setInfoMessage('');
+
+    if (!email.trim()) {
+      setError('Please enter your email address to request a reset link.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      setInfoMessage('A secure password reset link has been sent to your email.');
+    } catch (err: any) {
+      if (err.code === 'auth/user-not-found') {
+        setError('No account exists with this email address.');
+      } else {
+        setError(`Failed to send password reset: ${err.message || err.code}`);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, scale: 0.95 }}
@@ -56,16 +92,20 @@ export function LoginForm({ onSubmit, onToggleToSignUp, onCancel }: LoginFormPro
     >
       <div className="flex items-center gap-2">
         <button 
-          onClick={onCancel}
+          onClick={forgotPasswordMode ? () => { setForgotPasswordMode(false); setError(''); setInfoMessage(''); } : onCancel}
           disabled={loading}
           className="p-1.5 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer disabled:opacity-50"
-          title="Back to Welcome"
+          title="Back"
         >
           <ArrowLeft className="w-4 h-4" />
         </button>
         <div>
-          <h2 className="text-xl font-black text-white tracking-tight">Welcome Back</h2>
-          <p className="text-[11px] text-slate-400 font-semibold mt-0.5">Sign in to access your AI career workspace</p>
+          <h2 className="text-xl font-black text-white tracking-tight">
+            {forgotPasswordMode ? 'Reset Password' : 'Welcome Back'}
+          </h2>
+          <p className="text-[11px] text-slate-400 font-semibold mt-0.5">
+            {forgotPasswordMode ? 'Get a secure link to recover your credentials' : 'Sign in to access your AI career workspace'}
+          </p>
         </div>
       </div>
 
@@ -76,48 +116,96 @@ export function LoginForm({ onSubmit, onToggleToSignUp, onCancel }: LoginFormPro
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Email Address</label>
-          <input 
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            disabled={loading}
-            className="w-full liquid-glass-input rounded-xl px-4 py-3 text-xs font-bold text-white outline-none border border-slate-400/25 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 transition-all disabled:opacity-60"
-            placeholder="name@example.com"
-            required
-          />
+      {infoMessage && (
+        <div className="flex items-start gap-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl p-3 text-xs font-semibold">
+          <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{infoMessage}</span>
         </div>
+      )}
 
-        <div className="flex flex-col gap-1.5">
-          <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Password</label>
-          <input 
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
+      {forgotPasswordMode ? (
+        <form onSubmit={handleResetPassword} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Email Address</label>
+            <input 
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={loading}
+              className="w-full liquid-glass-input rounded-xl px-4 py-3 text-xs font-bold text-white outline-none border border-slate-400/25 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 transition-all disabled:opacity-60"
+              placeholder="name@example.com"
+              required
+            />
+          </div>
+
+          <button 
+            type="submit"
             disabled={loading}
-            className="w-full liquid-glass-input rounded-xl px-4 py-3 text-xs font-bold text-white outline-none border border-slate-400/25 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 transition-all disabled:opacity-60"
-            placeholder="••••••••"
-            required
-          />
-        </div>
+            className="mt-2 w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-700 text-white text-xs font-black uppercase tracking-widest rounded-full cursor-pointer transition-all shadow-md shadow-indigo-600/30 flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                <span>Sending...</span>
+              </>
+            ) : (
+              <span>Send Reset Link</span>
+            )}
+          </button>
+        </form>
+      ) : (
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Email Address</label>
+            <input 
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={loading}
+              className="w-full liquid-glass-input rounded-xl px-4 py-3 text-xs font-bold text-white outline-none border border-slate-400/25 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 transition-all disabled:opacity-60"
+              placeholder="name@example.com"
+              required
+            />
+          </div>
 
-        <button 
-          type="submit"
-          disabled={loading}
-          className="mt-2 w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-700 text-white text-xs font-black uppercase tracking-widest rounded-full cursor-pointer transition-all shadow-md shadow-indigo-600/30 flex items-center justify-center gap-2"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin text-white" />
-              <span>Signing In...</span>
-            </>
-          ) : (
-            <span>Sign In</span>
-          )}
-        </button>
-      </form>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex justify-between items-center">
+              <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Password</label>
+              <button
+                type="button"
+                onClick={() => { setForgotPasswordMode(true); setError(''); setInfoMessage(''); }}
+                className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold bg-transparent border-none cursor-pointer"
+              >
+                Forgot Password?
+              </button>
+            </div>
+            <input 
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={loading}
+              className="w-full liquid-glass-input rounded-xl px-4 py-3 text-xs font-bold text-white outline-none border border-slate-400/25 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400/30 transition-all disabled:opacity-60"
+              placeholder="••••••••"
+              required
+            />
+          </div>
+
+          <button 
+            type="submit"
+            disabled={loading}
+            className="mt-2 w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-700 text-white text-xs font-black uppercase tracking-widest rounded-full cursor-pointer transition-all shadow-md shadow-indigo-600/30 flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                <span>Signing In...</span>
+              </>
+            ) : (
+              <span>Sign In</span>
+            )}
+          </button>
+        </form>
+      )}
 
       <div className="text-center border-t border-slate-900/60 pt-4">
         <span className="text-[11px] font-semibold text-slate-400">
@@ -181,6 +269,13 @@ export function SignUpForm({ onSubmit, onToggleToSignIn, onCancel }: SignUpFormP
     try {
       // 1. Create account in Firebase Auth
       const cred = await createUserWithEmailAndPassword(auth, formData.email.trim(), formData.password.trim());
+      
+      // Send secure verification email
+      try {
+        await sendEmailVerification(cred.user);
+      } catch (err) {
+        console.error("Failed to send validation email:", err);
+      }
       
       // 2. Build the detailed profile document matching the Profile TS interface
       const defaultAvatar = 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80';

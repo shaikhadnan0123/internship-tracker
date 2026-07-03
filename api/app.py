@@ -16,6 +16,33 @@ from pipeline.bigquery_integration import (
 
 app = Flask(__name__)
 
+# Structured Logging Config
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger("internship_tracker_api")
+
+INTERNAL_AUTH_TOKEN = os.environ.get("INTERNAL_AUTH_TOKEN")
+
+@app.before_request
+def verify_internal_request():
+    if request.path in ("/", "/health"):
+        return
+    token = request.headers.get("X-Internal-Token")
+    if INTERNAL_AUTH_TOKEN:
+        if token != INTERNAL_AUTH_TOKEN:
+            logger.warning(f"[Security Violation] Unauthorized internal token check from IP {request.remote_addr}")
+            return jsonify({"error": "Unauthorized: Invalid internal auth token"}), 401
+    else:
+        if request.remote_addr != "127.0.0.1":
+            logger.warning(f"[Security Warning] Blocked public request to loopback backend from IP {request.remote_addr}")
+            return jsonify({"error": "Unauthorized: Access restricted to localhost loopback"}), 401
+
 # File paths
 CSV_BENCHMARK = "data/benchmark_results.csv"
 
@@ -25,11 +52,9 @@ import re
 def get_user_id():
     user_id = request.headers.get("X-User-Id")
     if not user_id:
-        # Allow fallback for local loopback development testing on Flask port
         if request.remote_addr == "127.0.0.1":
             return "local_dev"
         return None
-    # Sanitize user ID to prevent path traversal (alphanumeric, underscore, dash only)
     if not re.match(r"^[a-zA-Z0-9_\-]+$", user_id):
         return None
     return user_id
@@ -44,8 +69,11 @@ def get_user_csv_paths(user_id):
 def sanitize_input(text, max_len=200):
     if not isinstance(text, str):
         return ""
-    # Strip HTML tags and escape symbols to block XSS and injections
-    escaped = html.escape(text.strip())
+    text = text.strip()
+    # CSV formula injection prevention: escape leading (=, +, -, @) with a single quote
+    if text and text[0] in ('=', '+', '-', '@'):
+        text = "'" + text
+    escaped = html.escape(text)
     return escaped[:max_len]
 
 @app.after_request
@@ -85,7 +113,7 @@ def get_applications():
     df = get_applications_from_bq(user_id)
     
     if df is not None:
-        print(f"Serving applications data from Google Cloud BigQuery for user: {user_id}")
+        logger.info(f"Serving applications data from Google Cloud BigQuery for user: {user_id}")
         records = df.to_dict(orient="records")
         # Format dates to string
         for r in records:
@@ -95,7 +123,7 @@ def get_applications():
 
     # Fallback to local scored CSV
     csv_raw, csv_scored = get_user_csv_paths(user_id)
-    print(f"BigQuery unavailable. Serving applications data from local CSV for user: {user_id}")
+    logger.info(f"BigQuery unavailable. Serving applications data from local CSV for user: {user_id}")
     if not os.path.exists(csv_scored):
         if not os.path.exists(csv_raw):
             return jsonify([]), 200
@@ -124,7 +152,7 @@ def get_top_applications():
     df = get_top_n_from_bq(n, user_id)
     
     if df is not None:
-        print(f"Serving top {n} applications from Google Cloud BigQuery for user: {user_id}")
+        logger.info(f"Serving top {n} applications from Google Cloud BigQuery for user: {user_id}")
         records = df.to_dict(orient="records")
         for r in records:
             if hasattr(r.get('date_applied'), 'strftime'):
@@ -133,7 +161,7 @@ def get_top_applications():
 
     # Fallback to local CSV
     csv_raw, csv_scored = get_user_csv_paths(user_id)
-    print(f"BigQuery unavailable. Serving top {n} applications from local CSV for user: {user_id}")
+    logger.info(f"BigQuery unavailable. Serving top {n} applications from local CSV for user: {user_id}")
     if not os.path.exists(csv_scored):
         if not os.path.exists(csv_raw):
             return jsonify([]), 200
@@ -159,12 +187,12 @@ def get_stats():
     # Attempt to query from BigQuery first
     stats = get_stats_from_bq(user_id)
     if stats is not None:
-        print(f"Serving dashboard statistics from Google Cloud BigQuery for user: {user_id}")
+        logger.info(f"Serving dashboard statistics from Google Cloud BigQuery for user: {user_id}")
         return jsonify(stats), 200
 
     # Fallback to local CSV computation
     csv_raw, csv_scored = get_user_csv_paths(user_id)
-    print(f"BigQuery unavailable. Calculating statistics from local CSV for user: {user_id}")
+    logger.info(f"BigQuery unavailable. Calculating statistics from local CSV for user: {user_id}")
     if not os.path.exists(csv_scored):
         if not os.path.exists(csv_raw):
             return jsonify({
@@ -272,7 +300,7 @@ def add_application():
     os.makedirs(os.path.dirname(csv_raw), exist_ok=True)
     df_raw.to_csv(csv_raw, index=False)
 
-    print(f"Added new application {next_id} for user {user_id}. Re-running scoring pipeline...")
+    logger.info(f"Added new application {next_id} for user {user_id}. Re-running scoring pipeline...")
     
     # Re-run standard pipeline to generate new scores
     pipeline_success = run_pipeline(csv_raw, csv_scored)
@@ -323,7 +351,7 @@ def run_benchmark():
         import subprocess
         import json
         python_exe = sys.executable
-        print("Running benchmark from Flask API...")
+        logger.info("Running benchmark from Flask API...")
         process = subprocess.run([python_exe, "benchmark/benchmark.py"], capture_output=True, text=True)
         
         # Parse stdout for JSON_RESULT:
@@ -342,7 +370,7 @@ def run_benchmark():
             }), 200
         else:
             # Fallback to file reading if JSON print is missing
-            print("Failed to find JSON_RESULT in stdout, falling back to CSV file...")
+            logger.warning("Failed to find JSON_RESULT in stdout, falling back to CSV file...")
             if os.path.exists(CSV_BENCHMARK):
                 import pandas as pd
                 df = pd.read_csv(CSV_BENCHMARK)
@@ -359,5 +387,5 @@ def run_benchmark():
 
 if __name__ == "__main__":
     # Start flask application
-    # Listening on 0.0.0.0 to enable access from docker/host
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    # Listening strictly on 127.0.0.1 for local/proxy communication security
+    app.run(host="127.0.0.1", port=5000, debug=False)

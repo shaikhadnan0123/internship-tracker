@@ -12,7 +12,7 @@ import TrackerView from './components/TrackerView';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, AlertCircle, X, Bell, Building2, ChevronRight, Loader2 } from 'lucide-react';
 import { auth, db, secureFetch } from './firebase';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged, signOut, sendEmailVerification } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 interface Toast {
@@ -147,9 +147,12 @@ export default function App() {
     }
   };
 
+  const [isEmailVerified, setIsEmailVerified] = useState<boolean>(true);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        setIsEmailVerified(user.emailVerified);
         try {
           const docRef = doc(db, 'users', user.uid);
           const docSnap = await getDoc(docRef);
@@ -179,6 +182,7 @@ export default function App() {
         }
       } else {
         setIsLoggedIn(false);
+        setIsEmailVerified(true);
         localStorage.removeItem('intern_is_logged_in');
       }
       setIsAuthLoading(false);
@@ -555,6 +559,78 @@ export default function App() {
           </AnimatePresence>
         </div>
       </>
+    );
+  }
+
+  if (isLoggedIn && !isEmailVerified) {
+    return (
+      <div className="min-h-screen bg-[#020617] bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_transparent_32%),radial-gradient(circle_at_bottom_right,_rgba(129,140,248,0.2),_transparent_36%)] text-slate-100 flex flex-col items-center justify-center p-6" id="ln-app-email-verification">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="w-full max-w-md liquid-glass-card rounded-2xl p-8 border border-white/10 shadow-2xl flex flex-col gap-6"
+        >
+          <div className="text-center">
+            <h2 className="text-2xl font-black text-white tracking-tight">Verify Your Email</h2>
+            <p className="text-xs text-slate-400 font-semibold mt-2">
+              We've sent a verification link to <span className="text-indigo-400 font-black">{auth.currentUser?.email}</span>. Please verify your email to unlock your workspace.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={async () => {
+                setIsActionLoading(true);
+                try {
+                  await auth.currentUser?.reload();
+                  if (auth.currentUser?.emailVerified) {
+                    setIsEmailVerified(true);
+                    addToast("Email successfully verified! Welcome to your workspace.", "success");
+                  } else {
+                    addToast("Email is still not verified. Please check your inbox and click the verification link.", "info");
+                  }
+                } catch (e: any) {
+                  addToast(`Failed to refresh status: ${e.message || e}`, "info");
+                } finally {
+                  setIsActionLoading(false);
+                }
+              }}
+              disabled={isActionLoading}
+              className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-700 text-white text-xs font-black uppercase tracking-widest rounded-full cursor-pointer transition-all shadow-md shadow-indigo-600/30 flex items-center justify-center gap-2"
+            >
+              {isActionLoading ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : null}
+              <span>I have verified my email (Check Status)</span>
+            </button>
+
+            <button
+              onClick={async () => {
+                if (auth.currentUser) {
+                  setIsActionLoading(true);
+                  try {
+                    await sendEmailVerification(auth.currentUser);
+                    addToast("Verification email resent. Please check your inbox.", "success");
+                  } catch (e: any) {
+                    addToast(`Failed to resend email: ${e.message || e}`, "info");
+                  } finally {
+                    setIsActionLoading(false);
+                  }
+                }
+              }}
+              disabled={isActionLoading}
+              className="w-full py-3.5 bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-300 text-xs font-black uppercase tracking-widest rounded-full cursor-pointer transition-all flex items-center justify-center gap-2"
+            >
+              <span>Resend Verification Email</span>
+            </button>
+
+            <button
+              onClick={handleLogout}
+              className="w-full py-3.5 bg-transparent hover:bg-white/5 text-slate-400 hover:text-white text-xs font-black uppercase tracking-widest rounded-full cursor-pointer transition-all flex items-center justify-center gap-2"
+            >
+              <span>Sign Out & Go Back</span>
+            </button>
+          </div>
+        </motion.div>
+      </div>
     );
   }
 

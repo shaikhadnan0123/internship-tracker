@@ -3,7 +3,7 @@ import pandas as pd
 from google.cloud import bigquery
 from google.api_core.exceptions import GoogleAPIError
 
-PROJECT_ID = "project-32e06b00-613b-416f-a3a"
+PROJECT_ID = os.environ.get("GCLOUD_PROJECT") or os.environ.get("BIGQUERY_PROJECT_ID") or "project-32e06b00-613b-416f-a3a"
 DATASET_ID = "internship_tracker"
 TABLE_ID = "scored_applications"
 FULL_TABLE_REF = f"{PROJECT_ID}.{DATASET_ID}.{TABLE_ID}"
@@ -77,8 +77,13 @@ def upload_to_bigquery(csv_path="data/scored_applications.csv", user_id=None):
 
         # Clear previous records for this user first (prevents duplication during WRITE_APPEND)
         try:
-            delete_query = f"DELETE FROM `{FULL_TABLE_REF}` WHERE user_id = '{user_id}'"
-            client.query(delete_query).result()
+            delete_query = f"DELETE FROM `{FULL_TABLE_REF}` WHERE user_id = @user_id"
+            job_config = bigquery.QueryJobConfig(
+                query_parameters=[
+                    bigquery.ScalarQueryParameter("user_id", "STRING", user_id)
+                ]
+            )
+            client.query(delete_query, job_config=job_config).result()
             print(f"[BQ Upload] Cleared prior BQ records for user {user_id}.")
         except Exception as e:
             print(f"[BQ Upload] Note: Could not clear prior BQ records (this is expected if table is empty): {e}")
@@ -122,8 +127,13 @@ def get_applications_from_bq(user_id=None):
     if not user_id:
         user_id = "local_dev"
     try:
-        query = f"SELECT * FROM `{FULL_TABLE_REF}` WHERE user_id = '{user_id}' ORDER BY priority_score DESC"
-        query_job = client.query(query)
+        query = f"SELECT * FROM `{FULL_TABLE_REF}` WHERE user_id = @user_id ORDER BY priority_score DESC"
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("user_id", "STRING", user_id)
+            ]
+        )
+        query_job = client.query(query, job_config=job_config)
         df = query_job.to_dataframe()
         if 'user_id' in df.columns:
             df = df.drop(columns=['user_id'])
@@ -140,8 +150,14 @@ def get_top_n_from_bq(n=5, user_id=None):
     if not user_id:
         user_id = "local_dev"
     try:
-        query = f"SELECT * FROM `{FULL_TABLE_REF}` WHERE user_id = '{user_id}' ORDER BY priority_score DESC LIMIT {int(n)}"
-        query_job = client.query(query)
+        query = f"SELECT * FROM `{FULL_TABLE_REF}` WHERE user_id = @user_id ORDER BY priority_score DESC LIMIT @n"
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
+                bigquery.ScalarQueryParameter("n", "INT64", int(n))
+            ]
+        )
+        query_job = client.query(query, job_config=job_config)
         df = query_job.to_dataframe()
         if 'user_id' in df.columns:
             df = df.drop(columns=['user_id'])
@@ -165,20 +181,25 @@ def get_stats_from_bq(user_id=None):
             SUM(CASE WHEN LOWER(status) LIKE '%reject%' THEN 1 ELSE 0 END) as rejected_count,
             ROUND(AVG(priority_score), 1) as avg_priority_score
         FROM `{FULL_TABLE_REF}`
-        WHERE user_id = '{user_id}'
+        WHERE user_id = @user_id
         """
-        query_job = client.query(query)
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("user_id", "STRING", user_id)
+            ]
+        )
+        query_job = client.query(query, job_config=job_config)
         stats_df = query_job.to_dataframe()
 
         # Let's get platform breakdown for user
         platform_query = f"""
         SELECT platform, COUNT(*) as count 
         FROM `{FULL_TABLE_REF}` 
-        WHERE user_id = '{user_id}'
+        WHERE user_id = @user_id
         GROUP BY platform
         ORDER BY count DESC
         """
-        platform_job = client.query(platform_query)
+        platform_job = client.query(platform_query, job_config=job_config)
         platform_df = platform_job.to_dataframe()
 
         if stats_df.empty or stats_df.iloc[0].get("total_applications", 0) == 0:

@@ -38,20 +38,31 @@ var import_genai = require("@google/genai");
 var import_dotenv = __toESM(require("dotenv"), 1);
 import_dotenv.default.config();
 var app = (0, import_express.default)();
+app.set("trust proxy", 1);
 var PORT = parseInt(process.env.PORT || "3000");
 var GEMINI_API_KEY = process.env.GEMINI_API_KEY || "MY_GEMINI_API_KEY";
 app.use(import_express.default.json({ limit: "10mb" }));
 app.use((req, res, next) => {
-  if (process.env.NODE_ENV === "production" && req.headers["x-forwarded-proto"] !== "https") {
-    console.info(`[HTTPS Redirect] Redirecting unsecure request to HTTPS for ${req.headers.host}${req.url}`);
-    return res.redirect(301, `https://${req.headers.host}${req.url}`);
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (process.env.NODE_ENV === "production") {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    if (req.headers["x-forwarded-proto"] !== "https") {
+      console.info(`[HTTPS Redirect] Redirecting unsecure request to HTTPS for ${req.headers.host}${req.url}`);
+      return res.redirect(301, `https://${req.headers.host}${req.url}`);
+    }
   }
   next();
 });
 var rateLimits = /* @__PURE__ */ new Map();
 function rateLimiter(limit, windowMs, apiType) {
   return (req, res, next) => {
-    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "anonymous";
+    let ip = req.ip || "anonymous";
+    if (req.headers["x-forwarded-for"]) {
+      const forwarded = req.headers["x-forwarded-for"];
+      ip = forwarded.split(",")[0].trim();
+    }
     const key = `${ip}:${apiType}`;
     const now = Date.now();
     let info = rateLimits.get(key);
@@ -76,7 +87,10 @@ var apiRateLimiter = rateLimiter(100, 6e4, "Tracker API");
 var aiRateLimiter = rateLimiter(20, 6e4, "AI Coach API");
 app.use("/api/ai/", aiRateLimiter);
 app.use("/api/", apiRateLimiter);
-var FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || "AIzaSyCVydtoyyUkyZxP5AcgzTxFGSBe9fqgPq8";
+var FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || (process.env.NODE_ENV !== "production" ? "AIzaSyCVydtoyyUkyZxP5AcgzTxFGSBe9fqgPq8" : "");
+if (!FIREBASE_API_KEY) {
+  console.error("[CRITICAL] FIREBASE_API_KEY is not defined. Authentication is broken.");
+}
 async function verifyFirebaseToken(req, res, next) {
   if (!req.path.startsWith("/api/")) {
     return next();
@@ -105,6 +119,11 @@ async function verifyFirebaseToken(req, res, next) {
       return res.status(401).json({ error: "User profile not found." });
     }
     const verifiedUser = data.users[0];
+    const requireEmailVerification = process.env.REQUIRE_EMAIL_VERIFICATION !== "false";
+    if (requireEmailVerification && !verifiedUser.emailVerified) {
+      console.warn(`[Auth Violation] Access denied for unverified user ${verifiedUser.email} (${verifiedUser.localId}) from IP ${req.ip}`);
+      return res.status(403).json({ error: "Access denied. Your email address must be verified before using the API." });
+    }
     req.userId = verifiedUser.localId;
     req.userEmail = verifiedUser.email;
     req.headers["x-user-id"] = verifiedUser.localId;
@@ -154,9 +173,11 @@ function isTextGarbled(text) {
 }
 async function extractTextFromPdf(buffer) {
   try {
-    const pdfParse = require("pdf-parse");
-    const data = await pdfParse(buffer);
-    return data.text || "";
+    const { PDFParse } = require("pdf-parse");
+    const pdf = new PDFParse(new Uint8Array(buffer));
+    await pdf.load();
+    const result = await pdf.getText();
+    return result.text || "";
   } catch (error) {
     console.error("PDF Extraction Error:", error.message || error);
     throw new Error(`Failed to extract text from PDF: ${error.message || error}`);
@@ -164,7 +185,8 @@ async function extractTextFromPdf(buffer) {
 }
 async function extractTextFromDocx(buffer) {
   try {
-    const mammoth = require("mammoth");
+    const mammothReq = require("mammoth");
+    const mammoth = mammothReq.default || mammothReq;
     const result = await mammoth.extractRawText({ buffer });
     return result.value || "";
   } catch (error) {
@@ -401,15 +423,18 @@ function getOfflineFallbackAnalysis(resumeText) {
 }
 app.post("/api/ai/post-assistant", async (req, res) => {
   const { prompt, tone = "professional" } = req.body;
-  if (!prompt) {
-    return res.status(400).json({ error: "Prompt is required." });
+  if (typeof prompt !== "string" || prompt.trim().length === 0 || prompt.length > 1e3) {
+    return res.status(400).json({ error: "Invalid prompt. Must be a non-empty string under 1000 characters." });
+  }
+  if (typeof tone !== "string" || tone.length > 50) {
+    return res.status(400).json({ error: "Invalid tone parameter." });
   }
   const client = getAiClient();
   if (!client) {
     return res.json({ draft: getOfflineFallbackPost(prompt, tone) });
   }
   try {
-    const prompt2 = `Write a LinkedIn post about: "${prompt2}".
+    const fullPrompt = `Write a LinkedIn post about: "${prompt}".
       The tone should be: "${tone}".
       Keep it professional, engaging, scannable, and include 3 relevant hashtags. Ensure it sounds natural and authentic. Limit the post to 150-200 words. Do not use markdown backticks in the response.`;
     const configObj = { temperature: 0.1 };
@@ -417,7 +442,7 @@ app.post("/api/ai/post-assistant", async (req, res) => {
     try {
       const response = await client.models.generateContent({
         model: "gemini-2.5-pro",
-        contents: prompt2,
+        contents: fullPrompt,
         config: configObj
       });
       responseTextStr = response.text || "";
@@ -425,7 +450,7 @@ app.post("/api/ai/post-assistant", async (req, res) => {
       console.warn("Failed with pro, falling back to flash:", proError.message || proError);
       const response = await client.models.generateContent({
         model: "gemini-2.5-flash",
-        contents: prompt2,
+        contents: fullPrompt,
         config: configObj
       });
       responseTextStr = response.text || "";
@@ -440,6 +465,12 @@ app.post("/api/ai/chat-response", async (req, res) => {
   const { messages, partnerName, partnerHeadline } = req.body;
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: "Messages array is required." });
+  }
+  if (typeof partnerName !== "string" || partnerName.trim().length === 0 || partnerName.length > 100) {
+    return res.status(400).json({ error: "Invalid partner name." });
+  }
+  if (partnerHeadline && (typeof partnerHeadline !== "string" || partnerHeadline.length > 200)) {
+    return res.status(400).json({ error: "Invalid partner headline." });
   }
   const client = getAiClient();
   if (!client) {
@@ -484,8 +515,11 @@ app.post("/api/ai/chat-response", async (req, res) => {
 });
 app.post("/api/ai/cover-letter", async (req, res) => {
   const { jobTitle, company, jobDescription, profile } = req.body;
-  if (!jobTitle || !company) {
-    return res.status(400).json({ error: "Job title and company are required." });
+  if (typeof jobTitle !== "string" || jobTitle.trim().length === 0 || jobTitle.length > 200 || typeof company !== "string" || company.trim().length === 0 || company.length > 200) {
+    return res.status(400).json({ error: "Invalid job details. Title and company must be strings under 200 characters." });
+  }
+  if (jobDescription && (typeof jobDescription !== "string" || jobDescription.length > 5e3)) {
+    return res.status(400).json({ error: "Job description must be a string under 5000 characters." });
   }
   const client = getAiClient();
   if (!client) {
@@ -537,8 +571,8 @@ app.post("/api/ai/cover-letter", async (req, res) => {
 });
 app.post("/api/ai/optimize-profile", async (req, res) => {
   const { profile } = req.body;
-  if (!profile) {
-    return res.status(400).json({ error: "Profile details are required." });
+  if (typeof profile !== "object" || Array.isArray(profile) || !profile) {
+    return res.status(400).json({ error: "Invalid profile data. Must be a valid object." });
   }
   const client = getAiClient();
   if (!client) {
@@ -592,8 +626,8 @@ app.post("/api/ai/optimize-profile", async (req, res) => {
 });
 app.post("/api/ai/resume-question", async (req, res) => {
   const { resumeText, question } = req.body;
-  if (!resumeText || !question) {
-    return res.status(400).json({ error: "Resume text and question are required." });
+  if (typeof resumeText !== "string" || resumeText.length > 5e4 || typeof question !== "string" || question.length > 1e3) {
+    return res.status(400).json({ error: "Invalid parameters. Resume text and question must be strings within length limits." });
   }
   const client = getAiClient();
   if (!client) {
@@ -640,23 +674,26 @@ app.post("/api/ai/resume-question", async (req, res) => {
 });
 app.post("/api/ai/parse-resume", async (req, res) => {
   const { fileBase64, fileName, fileMimeType } = req.body;
-  if (!fileBase64) {
-    return res.status(400).json({ error: "Missing fileBase64 parameter." });
+  if (typeof fileBase64 !== "string" || !fileBase64) {
+    return res.status(400).json({ error: "Missing or invalid fileBase64 parameter." });
+  }
+  if (fileBase64.length * 0.75 > 5 * 1024 * 1024) {
+    return res.status(400).json({ error: "Uploaded file exceeds maximum limit of 5MB." });
   }
   try {
     const buffer = Buffer.from(fileBase64, "base64");
     let extractedText = "";
     const mime = fileMimeType || "";
-    const name = fileName || "resume.pdf";
-    if (mime === "application/pdf" || name.endsWith(".pdf")) {
+    const safeFileName = import_path.default.basename(fileName || "resume.pdf");
+    if (mime === "application/pdf" || safeFileName.endsWith(".pdf")) {
       extractedText = await extractTextFromPdf(buffer);
-    } else if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || name.endsWith(".docx")) {
+    } else if (mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || safeFileName.endsWith(".docx")) {
       extractedText = await extractTextFromDocx(buffer);
-    } else if (mime === "text/plain" || name.endsWith(".txt")) {
+    } else if (mime === "text/plain" || safeFileName.endsWith(".txt")) {
       extractedText = buffer.toString("utf-8");
     } else {
       return res.status(400).json({
-        error: `Unsupported file format: ${name}. Only PDF, DOCX, and TXT are supported.`
+        error: `Unsupported file format: ${safeFileName}. Only PDF, DOCX, and TXT are supported.`
       });
     }
     const cleanedText = cleanExtractedText(extractedText);
@@ -674,7 +711,7 @@ app.post("/api/ai/parse-resume", async (req, res) => {
     if (!client) {
       return res.json({
         text: cleanedText,
-        parsedProfile: getOfflineFallbackParsedProfile(cleanedText, name)
+        parsedProfile: getOfflineFallbackParsedProfile(cleanedText, safeFileName)
       });
     }
     const prompt = `You are a world-class applicant tracking system (ATS) parser and resume ingestion system.
@@ -862,8 +899,8 @@ STRICT INSTRUCTIONS:
 });
 app.post("/api/ai/resume-internships", async (req, res) => {
   const { resumeText } = req.body;
-  if (!resumeText) {
-    return res.status(400).json({ error: "Resume text is required to recommend internships." });
+  if (typeof resumeText !== "string" || resumeText.length > 5e4) {
+    return res.status(400).json({ error: "Invalid resume text. Must be a string under 50000 characters." });
   }
   const client = getAiClient();
   if (!client) {
@@ -933,8 +970,8 @@ app.post("/api/ai/resume-internships", async (req, res) => {
 });
 app.post("/api/ai/resume-analysis", async (req, res) => {
   const { resumeText } = req.body;
-  if (!resumeText) {
-    return res.status(400).json({ error: "Resume text is required for analysis." });
+  if (typeof resumeText !== "string" || resumeText.length > 5e4) {
+    return res.status(400).json({ error: "Invalid resume text. Must be a string under 50000 characters." });
   }
   const client = getAiClient();
   if (!client) {
@@ -1064,7 +1101,8 @@ app.all([
       method: req.method,
       headers: {
         "Content-Type": "application/json",
-        "X-User-Id": req.userId || ""
+        "X-User-Id": req.userId || "",
+        "X-Internal-Token": process.env.INTERNAL_AUTH_TOKEN || ""
       }
     };
     if (req.method !== "GET" && req.method !== "HEAD") {

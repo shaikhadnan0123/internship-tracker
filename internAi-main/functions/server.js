@@ -87,7 +87,7 @@ var apiRateLimiter = rateLimiter(100, 6e4, "Tracker API");
 var aiRateLimiter = rateLimiter(20, 6e4, "AI Coach API");
 app.use("/api/ai/", aiRateLimiter);
 app.use("/api/", apiRateLimiter);
-var FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || "AIzaSyCVydtoyyUkyZxP5AcgzTxFGSBe9fqgPq8";
+var FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || "AIzaSyBQWa84xtBpiXHfIf8cgtjQwanF5gJjfEQ";
 async function verifyFirebaseToken(req, res, next) {
   if (!req.path.startsWith("/api/")) {
     return next();

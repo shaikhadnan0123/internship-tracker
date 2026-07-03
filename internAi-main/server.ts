@@ -81,7 +81,7 @@ app.use("/api/ai/", aiRateLimiter);
 app.use("/api/", apiRateLimiter);
 
 // 3. Firebase Auth Token Verification Middleware to Prevent IDOR
-const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || "AIzaSyCVydtoyyUkyZxP5AcgzTxFGSBe9fqgPq8";
+const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || "AIzaSyBQWa84xtBpiXHfIf8cgtjQwanF5gJjfEQ";
 
 async function verifyFirebaseToken(req: any, res: any, next: any) {
   // Only verify paths starting with /api/

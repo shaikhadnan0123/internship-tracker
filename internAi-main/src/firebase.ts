@@ -4,12 +4,12 @@ import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyCVydtoyyUkyZxP5AcgzTxFGSBe9fqgPq8",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "hoow-ai.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "hoow-ai",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "hoow-ai.firebasestorage.app",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "694134936114",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:694134936114:web:76044bf301abd27377622b"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBQWa84xtBpiXHfIf8cgtjQwanF5gJjfEQ",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "vivid-grove-479413-f8.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "vivid-grove-479413-f8",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "vivid-grove-479413-f8.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "278616152276",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:278616152276:web:ce4225b78587d394934341"
 };
 
 // Initialize Firebase

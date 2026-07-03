@@ -1,15 +1,5 @@
 {
   "projects": {
-    "default": "hoow-ai"
-  },
-  "targets": {
-    "hoow-ai": {
-      "hosting": {
-        "intern-ai": [
-          "intern-ai-india"
-        ]
-      }
-    }
-  },
-  "etags": {}
+    "default": "vivid-grove-479413-f8"
+  }
 }

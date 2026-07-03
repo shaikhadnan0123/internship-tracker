@@ -87,10 +87,7 @@ var apiRateLimiter = rateLimiter(100, 6e4, "Tracker API");
 var aiRateLimiter = rateLimiter(20, 6e4, "AI Coach API");
 app.use("/api/ai/", aiRateLimiter);
 app.use("/api/", apiRateLimiter);
-var FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || (process.env.NODE_ENV !== "production" ? "AIzaSyCVydtoyyUkyZxP5AcgzTxFGSBe9fqgPq8" : "");
-if (!FIREBASE_API_KEY) {
-  console.error("[CRITICAL] FIREBASE_API_KEY is not defined. Authentication is broken.");
-}
+var FIREBASE_API_KEY = process.env.FIREBASE_API_KEY || "AIzaSyCVydtoyyUkyZxP5AcgzTxFGSBe9fqgPq8";
 async function verifyFirebaseToken(req, res, next) {
   if (!req.path.startsWith("/api/")) {
     return next();
@@ -304,7 +301,7 @@ Based on your resume, prepare to answer these 3 customized questions:
 3. **Architectural**: *"Why did you select Vite over other bundlers for your frontend builds, and how does your Express server handle incoming API requests?"*
 
 *Prepare 2-minute answers using the STAR method (Situation, Task, Action, Result) for maximum impact!*`;
-  } else if (q.includes("improve") || q.includes("format") || q.includes("review")) {
+  } else if (q.includes("improve") || q.includes("format") || q.includes("review") || q.includes("rephrase") || q.includes("accomplish") || q.includes("cv") || q.includes("optimize") || q.includes("optimiz")) {
     answer = `### \u{1F4DD} Recommended Resume Improvements
 
 Here are 3 concrete ways to make your CV stand out immediately:
@@ -719,7 +716,7 @@ Analyze the following cleaned resume text and parse it into a strict structured 
 
 Resume Text:
 ---
-\${cleanedText}
+${cleanedText}
 ---
 
 Extract the following information:
@@ -750,144 +747,150 @@ STRICT INSTRUCTIONS:
 - For ANY field that is missing, not mentioned, or cannot be found in the text, you MUST return null. Do NOT guess, do NOT invent, and do NOT hallucinate information.
 - Return null for missing fields instead of guessing (e.g., if there's no certifications, return "certifications": null or []).
 - Keep experience descriptions and project descriptions clean and professional.`;
-    let responseText = "";
+    let parsedProfile;
     try {
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-pro",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.1,
-          responseSchema: {
-            type: import_genai.Type.OBJECT,
-            properties: {
-              name: { type: import_genai.Type.STRING },
-              email: { type: import_genai.Type.STRING },
-              phone: { type: import_genai.Type.STRING },
-              location: { type: import_genai.Type.STRING },
-              headline: { type: import_genai.Type.STRING },
-              about: { type: import_genai.Type.STRING },
-              skills: {
-                type: import_genai.Type.ARRAY,
-                items: { type: import_genai.Type.STRING }
-              },
-              experience: {
-                type: import_genai.Type.ARRAY,
-                items: {
-                  type: import_genai.Type.OBJECT,
-                  properties: {
-                    company: { type: import_genai.Type.STRING },
-                    role: { type: import_genai.Type.STRING },
-                    duration: { type: import_genai.Type.STRING },
-                    description: { type: import_genai.Type.STRING }
-                  },
-                  required: ["company", "role"]
+      let responseText = "";
+      try {
+        const response = await client.models.generateContent({
+          model: "gemini-2.5-pro",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+            responseSchema: {
+              type: import_genai.Type.OBJECT,
+              properties: {
+                name: { type: import_genai.Type.STRING },
+                email: { type: import_genai.Type.STRING },
+                phone: { type: import_genai.Type.STRING },
+                location: { type: import_genai.Type.STRING },
+                headline: { type: import_genai.Type.STRING },
+                about: { type: import_genai.Type.STRING },
+                skills: {
+                  type: import_genai.Type.ARRAY,
+                  items: { type: import_genai.Type.STRING }
+                },
+                experience: {
+                  type: import_genai.Type.ARRAY,
+                  items: {
+                    type: import_genai.Type.OBJECT,
+                    properties: {
+                      company: { type: import_genai.Type.STRING },
+                      role: { type: import_genai.Type.STRING },
+                      duration: { type: import_genai.Type.STRING },
+                      description: { type: import_genai.Type.STRING }
+                    },
+                    required: ["company", "role"]
+                  }
+                },
+                education: {
+                  type: import_genai.Type.ARRAY,
+                  items: {
+                    type: import_genai.Type.OBJECT,
+                    properties: {
+                      school: { type: import_genai.Type.STRING },
+                      degree: { type: import_genai.Type.STRING },
+                      duration: { type: import_genai.Type.STRING }
+                    },
+                    required: ["school"]
+                  }
+                },
+                projects: {
+                  type: import_genai.Type.ARRAY,
+                  items: {
+                    type: import_genai.Type.OBJECT,
+                    properties: {
+                      title: { type: import_genai.Type.STRING },
+                      description: { type: import_genai.Type.STRING },
+                      duration: { type: import_genai.Type.STRING }
+                    },
+                    required: ["title"]
+                  }
+                },
+                certifications: {
+                  type: import_genai.Type.ARRAY,
+                  items: { type: import_genai.Type.STRING }
                 }
               },
-              education: {
-                type: import_genai.Type.ARRAY,
-                items: {
-                  type: import_genai.Type.OBJECT,
-                  properties: {
-                    school: { type: import_genai.Type.STRING },
-                    degree: { type: import_genai.Type.STRING },
-                    duration: { type: import_genai.Type.STRING }
-                  },
-                  required: ["school"]
-                }
-              },
-              projects: {
-                type: import_genai.Type.ARRAY,
-                items: {
-                  type: import_genai.Type.OBJECT,
-                  properties: {
-                    title: { type: import_genai.Type.STRING },
-                    description: { type: import_genai.Type.STRING },
-                    duration: { type: import_genai.Type.STRING }
-                  },
-                  required: ["title"]
-                }
-              },
-              certifications: {
-                type: import_genai.Type.ARRAY,
-                items: { type: import_genai.Type.STRING }
-              }
-            },
-            required: ["name", "skills"]
+              required: ["name", "skills"]
+            }
           }
-        }
-      });
-      responseText = response.text || "";
-    } catch (proError) {
-      console.warn("Failed to generate with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.1,
-          responseSchema: {
-            type: import_genai.Type.OBJECT,
-            properties: {
-              name: { type: import_genai.Type.STRING },
-              email: { type: import_genai.Type.STRING },
-              phone: { type: import_genai.Type.STRING },
-              location: { type: import_genai.Type.STRING },
-              headline: { type: import_genai.Type.STRING },
-              about: { type: import_genai.Type.STRING },
-              skills: {
-                type: import_genai.Type.ARRAY,
-                items: { type: import_genai.Type.STRING }
-              },
-              experience: {
-                type: import_genai.Type.ARRAY,
-                items: {
-                  type: import_genai.Type.OBJECT,
-                  properties: {
-                    company: { type: import_genai.Type.STRING },
-                    role: { type: import_genai.Type.STRING },
-                    duration: { type: import_genai.Type.STRING },
-                    description: { type: import_genai.Type.STRING }
-                  },
-                  required: ["company", "role"]
+        });
+        responseText = response.text || "";
+      } catch (proError) {
+        console.warn("Failed to generate with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
+        const response = await client.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+            responseSchema: {
+              type: import_genai.Type.OBJECT,
+              properties: {
+                name: { type: import_genai.Type.STRING },
+                email: { type: import_genai.Type.STRING },
+                phone: { type: import_genai.Type.STRING },
+                location: { type: import_genai.Type.STRING },
+                headline: { type: import_genai.Type.STRING },
+                about: { type: import_genai.Type.STRING },
+                skills: {
+                  type: import_genai.Type.ARRAY,
+                  items: { type: import_genai.Type.STRING }
+                },
+                experience: {
+                  type: import_genai.Type.ARRAY,
+                  items: {
+                    type: import_genai.Type.OBJECT,
+                    properties: {
+                      company: { type: import_genai.Type.STRING },
+                      role: { type: import_genai.Type.STRING },
+                      duration: { type: import_genai.Type.STRING },
+                      description: { type: import_genai.Type.STRING }
+                    },
+                    required: ["company", "role"]
+                  }
+                },
+                education: {
+                  type: import_genai.Type.ARRAY,
+                  items: {
+                    type: import_genai.Type.OBJECT,
+                    properties: {
+                      school: { type: import_genai.Type.STRING },
+                      degree: { type: import_genai.Type.STRING },
+                      duration: { type: import_genai.Type.STRING }
+                    },
+                    required: ["school"]
+                  }
+                },
+                projects: {
+                  type: import_genai.Type.ARRAY,
+                  items: {
+                    type: import_genai.Type.OBJECT,
+                    properties: {
+                      title: { type: import_genai.Type.STRING },
+                      description: { type: import_genai.Type.STRING },
+                      duration: { type: import_genai.Type.STRING }
+                    },
+                    required: ["title"]
+                  }
+                },
+                certifications: {
+                  type: import_genai.Type.ARRAY,
+                  items: { type: import_genai.Type.STRING }
                 }
               },
-              education: {
-                type: import_genai.Type.ARRAY,
-                items: {
-                  type: import_genai.Type.OBJECT,
-                  properties: {
-                    school: { type: import_genai.Type.STRING },
-                    degree: { type: import_genai.Type.STRING },
-                    duration: { type: import_genai.Type.STRING }
-                  },
-                  required: ["school"]
-                }
-              },
-              projects: {
-                type: import_genai.Type.ARRAY,
-                items: {
-                  type: import_genai.Type.OBJECT,
-                  properties: {
-                    title: { type: import_genai.Type.STRING },
-                    description: { type: import_genai.Type.STRING },
-                    duration: { type: import_genai.Type.STRING }
-                  },
-                  required: ["title"]
-                }
-              },
-              certifications: {
-                type: import_genai.Type.ARRAY,
-                items: { type: import_genai.Type.STRING }
-              }
-            },
-            required: ["name", "skills"]
+              required: ["name", "skills"]
+            }
           }
-        }
-      });
-      responseText = response.text || "";
+        });
+        responseText = response.text || "";
+      }
+      parsedProfile = JSON.parse(responseText || "{}");
+    } catch (apiOrJsonError) {
+      console.warn("Gemini API resume parsing error (falling back to offline parsed profile):", apiOrJsonError.message || apiOrJsonError);
+      parsedProfile = getOfflineFallbackParsedProfile(cleanedText, safeFileName);
     }
-    const parsedProfile = JSON.parse(responseText || "{}");
     res.json({
       text: cleanedText,
       parsedProfile

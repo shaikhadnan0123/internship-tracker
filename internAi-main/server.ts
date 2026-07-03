@@ -739,7 +739,7 @@ Analyze the following cleaned resume text and parse it into a strict structured 
 
 Resume Text:
 ---
-\${cleanedText}
+${cleanedText}
 ---
 
 Extract the following information:
@@ -771,145 +771,152 @@ STRICT INSTRUCTIONS:
 - Return null for missing fields instead of guessing (e.g., if there's no certifications, return "certifications": null or []).
 - Keep experience descriptions and project descriptions clean and professional.`;
 
-    let responseText = "";
+    let parsedProfile;
     try {
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-pro",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.1,
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING },
-              email: { type: Type.STRING },
-              phone: { type: Type.STRING },
-              location: { type: Type.STRING },
-              headline: { type: Type.STRING },
-              about: { type: Type.STRING },
-              skills: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
-              experience: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    company: { type: Type.STRING },
-                    role: { type: Type.STRING },
-                    duration: { type: Type.STRING },
-                    description: { type: Type.STRING }
-                  },
-                  required: ["company", "role"]
+      let responseText = "";
+      try {
+        const response = await client.models.generateContent({
+          model: "gemini-2.5-pro",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                email: { type: Type.STRING },
+                phone: { type: Type.STRING },
+                location: { type: Type.STRING },
+                headline: { type: Type.STRING },
+                about: { type: Type.STRING },
+                skills: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                experience: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      company: { type: Type.STRING },
+                      role: { type: Type.STRING },
+                      duration: { type: Type.STRING },
+                      description: { type: Type.STRING }
+                    },
+                    required: ["company", "role"]
+                  }
+                },
+                education: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      school: { type: Type.STRING },
+                      degree: { type: Type.STRING },
+                      duration: { type: Type.STRING }
+                    },
+                    required: ["school"]
+                  }
+                },
+                projects: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                      duration: { type: Type.STRING }
+                    },
+                    required: ["title"]
+                  }
+                },
+                certifications: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
                 }
               },
-              education: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    school: { type: Type.STRING },
-                    degree: { type: Type.STRING },
-                    duration: { type: Type.STRING }
-                  },
-                  required: ["school"]
-                }
-              },
-              projects: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    title: { type: Type.STRING },
-                    description: { type: Type.STRING },
-                    duration: { type: Type.STRING }
-                  },
-                  required: ["title"]
-                }
-              },
-              certifications: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
-            },
-            required: ["name", "skills"]
+              required: ["name", "skills"]
+            }
           }
-        }
-      });
-      responseText = response.text || "";
-    } catch (proError: any) {
-      console.warn("Failed to generate with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.1,
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              name: { type: Type.STRING },
-              email: { type: Type.STRING },
-              phone: { type: Type.STRING },
-              location: { type: Type.STRING },
-              headline: { type: Type.STRING },
-              about: { type: Type.STRING },
-              skills: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              },
-              experience: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    company: { type: Type.STRING },
-                    role: { type: Type.STRING },
-                    duration: { type: Type.STRING },
-                    description: { type: Type.STRING }
-                  },
-                  required: ["company", "role"]
+        });
+        responseText = response.text || "";
+      } catch (proError: any) {
+        console.warn("Failed to generate with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
+        const response = await client.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            temperature: 0.1,
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                email: { type: Type.STRING },
+                phone: { type: Type.STRING },
+                location: { type: Type.STRING },
+                headline: { type: Type.STRING },
+                about: { type: Type.STRING },
+                skills: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+                },
+                experience: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      company: { type: Type.STRING },
+                      role: { type: Type.STRING },
+                      duration: { type: Type.STRING },
+                      description: { type: Type.STRING }
+                    },
+                    required: ["company", "role"]
+                  }
+                },
+                education: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      school: { type: Type.STRING },
+                      degree: { type: Type.STRING },
+                      duration: { type: Type.STRING }
+                    },
+                    required: ["school"]
+                  }
+                },
+                projects: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      title: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                      duration: { type: Type.STRING }
+                    },
+                    required: ["title"]
+                  }
+                },
+                certifications: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
                 }
               },
-              education: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    school: { type: Type.STRING },
-                    degree: { type: Type.STRING },
-                    duration: { type: Type.STRING }
-                  },
-                  required: ["school"]
-                }
-              },
-              projects: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    title: { type: Type.STRING },
-                    description: { type: Type.STRING },
-                    duration: { type: Type.STRING }
-                  },
-                  required: ["title"]
-                }
-              },
-              certifications: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING }
-              }
-            },
-            required: ["name", "skills"]
+              required: ["name", "skills"]
+            }
           }
-        }
-      });
-      responseText = response.text || "";
+        });
+        responseText = response.text || "";
+      }
+
+      parsedProfile = JSON.parse(responseText || "{}");
+    } catch (apiOrJsonError: any) {
+      console.warn("Gemini API resume parsing error (falling back to offline parsed profile):", apiOrJsonError.message || apiOrJsonError);
+      parsedProfile = getOfflineFallbackParsedProfile(cleanedText, safeFileName);
     }
 
-    const parsedProfile = JSON.parse(responseText || "{}");
     res.json({
       text: cleanedText,
       parsedProfile

@@ -438,7 +438,7 @@ app.post("/api/ai/post-assistant", async (req, res) => {
     let responseTextStr = "";
     try {
       const response = await client.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-3.1-pro-preview",
         contents: fullPrompt,
         config: configObj
       });
@@ -446,7 +446,7 @@ app.post("/api/ai/post-assistant", async (req, res) => {
     } catch (proError) {
       console.warn("Failed with pro, falling back to flash:", proError.message || proError);
       const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.5-flash",
         contents: fullPrompt,
         config: configObj
       });
@@ -490,7 +490,7 @@ app.post("/api/ai/chat-response", async (req, res) => {
     let responseTextStr = "";
     try {
       const response = await client.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-3.1-pro-preview",
         contents: prompt,
         config: configObj
       });
@@ -498,7 +498,7 @@ app.post("/api/ai/chat-response", async (req, res) => {
     } catch (proError) {
       console.warn("Failed with pro, falling back to flash:", proError.message || proError);
       const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.5-flash",
         contents: prompt,
         config: configObj
       });
@@ -546,7 +546,7 @@ app.post("/api/ai/cover-letter", async (req, res) => {
     let responseTextStr = "";
     try {
       const response = await client.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-3.1-pro-preview",
         contents: prompt,
         config: configObj
       });
@@ -554,7 +554,7 @@ app.post("/api/ai/cover-letter", async (req, res) => {
     } catch (proError) {
       console.warn("Failed with pro, falling back to flash:", proError.message || proError);
       const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.5-flash",
         contents: prompt,
         config: configObj
       });
@@ -600,7 +600,7 @@ app.post("/api/ai/optimize-profile", async (req, res) => {
     let responseTextStr = "";
     try {
       const response = await client.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-3.1-pro-preview",
         contents: prompt,
         config: configObj
       });
@@ -608,7 +608,7 @@ app.post("/api/ai/optimize-profile", async (req, res) => {
     } catch (proError) {
       console.warn("Failed with pro, falling back to flash:", proError.message || proError);
       const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.5-flash",
         contents: prompt,
         config: configObj
       });
@@ -649,7 +649,7 @@ app.post("/api/ai/resume-question", async (req, res) => {
     let responseTextStr = "";
     try {
       const response = await client.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-3.1-pro-preview",
         contents: prompt,
         config: configObj
       });
@@ -657,7 +657,7 @@ app.post("/api/ai/resume-question", async (req, res) => {
     } catch (proError) {
       console.warn("Failed with pro, falling back to flash:", proError.message || proError);
       const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.5-flash",
         contents: prompt,
         config: configObj
       });
@@ -752,7 +752,7 @@ STRICT INSTRUCTIONS:
       let responseText = "";
       try {
         const response = await client.models.generateContent({
-          model: "gemini-2.5-pro",
+          model: "gemini-3.1-pro-preview",
           contents: prompt,
           config: {
             responseMimeType: "application/json",
@@ -818,9 +818,9 @@ STRICT INSTRUCTIONS:
         });
         responseText = response.text || "";
       } catch (proError) {
-        console.warn("Failed to generate with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
+        console.warn("Failed to generate with gemini-3.1-pro-preview, falling back to gemini-3.5-flash:", proError.message || proError);
         const response = await client.models.generateContent({
-          model: "gemini-2.5-flash",
+          model: "gemini-3.5-flash",
           contents: prompt,
           config: {
             responseMimeType: "application/json",
@@ -950,15 +950,15 @@ app.post("/api/ai/resume-internships", async (req, res) => {
     let responseText = "";
     try {
       const response = await client.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-3.1-pro-preview",
         contents: prompt,
         config: configObj
       });
       responseText = response.text || "[]";
     } catch (proError) {
-      console.warn("Failed to generate internships with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
+      console.warn("Failed to generate internships with gemini-3.1-pro-preview, falling back to gemini-3.5-flash:", proError.message || proError);
       const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.5-flash",
         contents: prompt,
         config: configObj
       });
@@ -1068,15 +1068,15 @@ app.post("/api/ai/resume-analysis", async (req, res) => {
     let responseText = "";
     try {
       const response = await client.models.generateContent({
-        model: "gemini-2.5-pro",
+        model: "gemini-3.1-pro-preview",
         contents: prompt,
         config: configObj
       });
       responseText = response.text || "{}";
     } catch (proError) {
-      console.warn("Failed to generate analysis with gemini-2.5-pro, falling back to gemini-2.5-flash:", proError.message || proError);
+      console.warn("Failed to generate analysis with gemini-3.1-pro-preview, falling back to gemini-3.5-flash:", proError.message || proError);
       const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.5-flash",
         contents: prompt,
         config: configObj
       });

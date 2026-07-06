@@ -16,7 +16,8 @@ __pycache__/
 Thumbs.db
 
 # GCP and Local credentials / environment variables
-*.json
+*key*.json
+*credential*.json
 !.github/**/*.json
 .env
 .env.*

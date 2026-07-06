@@ -1,0 +1,8 @@
+{
+  "name": "Remix: internAi",
+  "description": "An interactive professional networking application featuring a personalized home feed, a messaging center with AI-simulated recruiters, job board with an AI cover letter generator, my-network hub, and an editable profile with an AI profile optimization coach.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

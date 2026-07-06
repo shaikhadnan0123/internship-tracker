@@ -40,8 +40,6 @@ jobs:
         run: |
           IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:${{ github.sha }}"
           gcloud builds submit --tag "$IMAGE_TAG"
-          # Add latest tag using metadata tagging in registry without rebuilding
-          gcloud artifacts docker tags add "$IMAGE_TAG" "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:latest" --quiet
 
       - name: Deploy to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2

@@ -36,18 +36,12 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
-      - name: Configure Docker Auth
-        run: |
-          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-
-      - name: Build and Push Docker Image
+      - name: Build and Push Docker Image via Cloud Build
         run: |
           IMAGE_TAG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:${{ github.sha }}"
-          docker build -t "$IMAGE_TAG" .
-          docker push "$IMAGE_TAG"
-          # Also tag as latest
-          docker tag "$IMAGE_TAG" "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:latest"
-          docker push "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:latest"
+          gcloud builds submit --tag "$IMAGE_TAG"
+          # Add latest tag using metadata tagging in registry without rebuilding
+          gcloud artifacts docker tags add "$IMAGE_TAG" "${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}/image:latest"
 
       - name: Deploy to Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2

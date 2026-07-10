@@ -570,8 +570,8 @@ app.post("/api/ai/post-assistant", async (req, res) => {
     const responseTextStr = await generateAiContent({ prompt: fullPrompt });
     res.json({ draft: responseTextStr });
   } catch (error: any) {
-    console.warn("AI API post-assistant error (falling back to offline helper):", error.message || error);
-    res.json({ draft: getOfflineFallbackPost(prompt, tone) });
+    console.error("AI API post-assistant error:", error.message || error);
+    res.status(500).json({ error: `AI generation failed: ${error.message || error}. Please ensure your API key account has valid credits.` });
   }
 });
 
@@ -603,8 +603,8 @@ app.post("/api/ai/chat-response", async (req, res) => {
     const responseTextStr = await generateAiContent({ prompt });
     res.json({ response: responseTextStr.trim() });
   } catch (error: any) {
-    console.warn("AI API chat error (falling back to offline helper):", error.message || error);
-    res.json({ response: getOfflineFallbackChat(messages, partnerName) });
+    console.error("AI API chat error:", error.message || error);
+    res.status(500).json({ error: `AI generation failed: ${error.message || error}. Please ensure your API key account has valid credits.` });
   }
 });
 
@@ -629,8 +629,8 @@ app.post("/api/ai/cover-letter", async (req, res) => {
     const responseTextStr = await generateAiContent({ prompt });
     res.json({ coverLetter: responseTextStr });
   } catch (error: any) {
-    console.warn("AI API cover letter error (falling back to offline helper):", error.message || error);
-    res.json({ coverLetter: getOfflineFallbackCoverLetter(jobTitle, company, jobDescription, profile) });
+    console.error("AI API cover letter error:", error.message || error);
+    res.status(500).json({ error: `AI generation failed: ${error.message || error}. Please ensure your API key account has valid credits.` });
   }
 });
 
@@ -656,8 +656,8 @@ app.post("/api/ai/optimize-profile", async (req, res) => {
     const parsed = JSON.parse(responseTextStr);
     res.json({ suggestions: parsed });
   } catch (error: any) {
-    console.warn("AI API profile optimization error (falling back to offline helper):", error.message || error);
-    res.json({ suggestions: getOfflineFallbackSuggestions(profile) });
+    console.error("AI API profile optimization error:", error.message || error);
+    res.status(500).json({ error: `AI generation failed: ${error.message || error}. Please ensure your API key account has valid credits.` });
   }
 });
 
@@ -678,8 +678,8 @@ app.post("/api/ai/resume-question", async (req, res) => {
     const responseTextStr = await generateAiContent({ prompt });
     res.json({ answer: responseTextStr });
   } catch (error: any) {
-    console.warn("AI API resume question error (falling back to offline helper):", error.message || error);
-    res.json({ answer: getOfflineFallbackQuestion(resumeText, question) });
+    console.error("AI API resume question error:", error.message || error);
+    res.status(500).json({ error: `AI generation failed: ${error.message || error}. Please ensure your API key account has valid credits.` });
   }
 });
 
@@ -841,8 +841,8 @@ STRICT INSTRUCTIONS:
 
       parsedProfile = JSON.parse(responseText || "{}");
     } catch (apiOrJsonError: any) {
-      console.warn("AI API resume parsing error (falling back to offline parsed profile):", apiOrJsonError.message || apiOrJsonError);
-      parsedProfile = getOfflineFallbackParsedProfile(cleanedText, safeFileName);
+      console.error("AI API resume parsing error:", apiOrJsonError.message || apiOrJsonError);
+      return res.status(500).json({ error: `AI resume parsing failed: ${apiOrJsonError.message || apiOrJsonError}. Please ensure your API key account has valid credits.` });
     }
 
     res.json({
@@ -909,8 +909,8 @@ app.post("/api/ai/resume-internships", async (req, res) => {
     const parsed = JSON.parse(responseText);
     res.json({ recommendations: parsed });
   } catch (error: any) {
-    console.warn("AI API internship matching error (falling back to offline helper):", error.message || error);
-    res.json({ recommendations: getOfflineFallbackInternships(resumeText) });
+    console.error("AI API internship matching error:", error.message || error);
+    res.status(500).json({ error: `AI generation failed: ${error.message || error}. Please ensure your API key account has valid credits.` });
   }
 });
 
@@ -1015,8 +1015,8 @@ app.post("/api/ai/resume-analysis", async (req, res) => {
     const parsed = JSON.parse(responseText);
     res.json({ analysis: parsed });
   } catch (error: any) {
-    console.warn("AI API resume analysis error (falling back to offline helper):", error.message || error);
-    res.json({ analysis: getOfflineFallbackAnalysis(resumeText) });
+    console.error("AI API resume analysis error:", error.message || error);
+    res.status(500).json({ error: `AI generation failed: ${error.message || error}. Please ensure your API key account has valid credits.` });
   }
 });
 

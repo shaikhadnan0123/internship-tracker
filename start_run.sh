@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Generate a cryptographically secure random internal token if not set in the environment
 if [ -z "$INTERNAL_AUTH_TOKEN" ]; then
@@ -8,7 +8,7 @@ fi
 
 # Start Flask Backend in the background, streaming output directly to stdout/stderr
 echo "Starting Flask Backend on port 5000..."
-python -u api/app.py &
+python3 -u api/app.py &
 
 # Wait 18 seconds to let Flask bind
 sleep 18

@@ -206,8 +206,8 @@ async function generateAiContent(options: {
   }
 
   if (isXaiKey) {
-    // Call xAI Grok API (OpenAI-compatible)
-    const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    // Call xAI Grok Responses API
+    const response = await fetch("https://api.x.ai/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -215,9 +215,7 @@ async function generateAiContent(options: {
       },
       body: JSON.stringify({
         model: "grok-beta",
-        messages: [
-          { role: "user", content: options.prompt }
-        ],
+        input: options.prompt,
         temperature: 0.1,
         response_format: options.jsonMode ? { type: "json_object" } : undefined
       })
@@ -229,7 +227,27 @@ async function generateAiContent(options: {
     }
 
     const data = await response.json() as any;
-    return data.choices?.[0]?.message?.content || "";
+    
+    // Parse modern xAI Responses API output structure
+    let text = "";
+    if (Array.isArray(data.output)) {
+      for (const item of data.output) {
+        if (item.type === "message" && item.content && Array.isArray(item.content)) {
+          for (const chunk of item.content) {
+            if (chunk.type === "output_text" && chunk.text) {
+              text += chunk.text;
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback parsing for legacy/compatible OpenAI formats
+    if (!text && data.choices?.[0]?.message?.content) {
+      text = data.choices[0].message.content;
+    }
+
+    return text || JSON.stringify(data);
   } else {
     // Call Google GenAI API
     const client = getAiClient();

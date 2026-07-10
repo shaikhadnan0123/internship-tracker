@@ -185,7 +185,7 @@ async function generateAiContent(options) {
     throw new Error("No API key provided");
   }
   if (isXaiKey) {
-    const response = await fetch("https://api.x.ai/v1/chat/completions", {
+    const response = await fetch("https://api.x.ai/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -193,9 +193,7 @@ async function generateAiContent(options) {
       },
       body: JSON.stringify({
         model: "grok-beta",
-        messages: [
-          { role: "user", content: options.prompt }
-        ],
+        input: options.prompt,
         temperature: 0.1,
         response_format: options.jsonMode ? { type: "json_object" } : void 0
       })
@@ -205,7 +203,22 @@ async function generateAiContent(options) {
       throw new Error(`xAI API returned status ${response.status}: ${errText}`);
     }
     const data = await response.json();
-    return data.choices?.[0]?.message?.content || "";
+    let text = "";
+    if (Array.isArray(data.output)) {
+      for (const item of data.output) {
+        if (item.type === "message" && item.content && Array.isArray(item.content)) {
+          for (const chunk of item.content) {
+            if (chunk.type === "output_text" && chunk.text) {
+              text += chunk.text;
+            }
+          }
+        }
+      }
+    }
+    if (!text && data.choices?.[0]?.message?.content) {
+      text = data.choices[0].message.content;
+    }
+    return text || JSON.stringify(data);
   } else {
     const client = getAiClient();
     if (!client) {

@@ -1,4 +1,4 @@
-import { Home, Bell, User, Search, Briefcase, Cloud } from 'lucide-react';
+import { Home, Bell, User, Search, Briefcase } from 'lucide-react';
 import AiIcon from './AiIcon';
 import { Profile } from '../types';
 
@@ -22,7 +22,6 @@ export default function Navbar({
   const navItems = [
     { id: 'feed', label: 'Dashboard', icon: Home, badge: 0 },
     { id: 'tracker', label: 'Tracker', icon: Briefcase, badge: 0 },
-    { id: 'gcp', label: 'GCP Program', icon: Cloud, badge: 0 },
     { id: 'notifications', label: 'Updates', icon: Bell, badge: unreadNotificationsCount },
     { id: 'profile', label: 'Profile', icon: User, badge: 0, isProfile: true }
   ];

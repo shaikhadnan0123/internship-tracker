@@ -1146,8 +1146,29 @@ async function startServer() {
   } else {
     const distPath = import_path.default.join(process.cwd(), "dist");
     app.use(import_express.default.static(distPath));
+    const fs = require("fs");
+    const indexPath = import_path.default.join(distPath, "index.html");
     app.get("*", (req, res) => {
-      res.sendFile(import_path.default.join(distPath, "index.html"));
+      try {
+        let html = fs.readFileSync(indexPath, "utf8");
+        const configScript = `
+<script>
+  window.FIREBASE_CONFIG = {
+    apiKey: "${process.env.VITE_FIREBASE_API_KEY || process.env.FIREBASE_API_KEY || "AIzaSyBQWa84xtBpiXHfIf8cgtjQwanF5gJjfEQ"}",
+    authDomain: "${process.env.VITE_FIREBASE_AUTH_DOMAIN || "vivid-grove-479413-f8.firebaseapp.com"}",
+    projectId: "${process.env.VITE_FIREBASE_PROJECT_ID || "vivid-grove-479413-f8"}",
+    storageBucket: "${process.env.VITE_FIREBASE_STORAGE_BUCKET || "vivid-grove-479413-f8.firebasestorage.app"}",
+    messagingSenderId: "${process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "278616152276"}",
+    appId: "${process.env.VITE_FIREBASE_APP_ID || "1:278616152276:web:ce4225b78587d394934341"}"
+  };
+</script>
+</head>`;
+        html = html.replace("</head>", configScript);
+        res.send(html);
+      } catch (err) {
+        console.error("Failed to inject runtime Firebase config:", err);
+        res.sendFile(indexPath);
+      }
     });
   }
   app.listen(PORT, "0.0.0.0", () => {

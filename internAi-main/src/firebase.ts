@@ -3,7 +3,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-const firebaseConfig = {
+const firebaseConfig = (typeof window !== "undefined" && (window as any).FIREBASE_CONFIG) || {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBQWa84xtBpiXHfIf8cgtjQwanF5gJjfEQ",
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "vivid-grove-479413-f8.firebaseapp.com",
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "vivid-grove-479413-f8",

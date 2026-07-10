@@ -1,3 +1,12 @@
+import Module from 'module';
+const originalRequire = Module.prototype.require;
+Module.prototype.require = function (this: any, id: string) {
+  if (id === 'canvas') {
+    return {};
+  }
+  return originalRequire.apply(this, arguments as any);
+};
+
 import express from "express";
 import path from "path";
 // Note: We do NOT import 'vite' statically at the top level. Doing so would cause
@@ -5,8 +14,22 @@ import path from "path";
 // where devDependencies are not installed. Instead, it is imported dynamically.
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import fs from "fs";
 
-dotenv.config();
+const envPaths = [
+  path.resolve(process.cwd(), ".env"),
+  path.resolve(__dirname, ".env"),
+  path.resolve(__dirname, "..", ".env"),
+  path.resolve(__dirname, "..", "..", ".env"),
+];
+
+for (const envPath of envPaths) {
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+    console.log(`[Env] Loaded environment variables from: ${envPath}`);
+    break;
+  }
+}
 
 const app = express();
 app.set('trust proxy', 1);

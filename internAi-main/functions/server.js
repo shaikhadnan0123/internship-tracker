@@ -32,11 +32,32 @@ __export(server_exports, {
   app: () => app
 });
 module.exports = __toCommonJS(server_exports);
+var import_module = __toESM(require("module"), 1);
 var import_express = __toESM(require("express"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_genai = require("@google/genai");
 var import_dotenv = __toESM(require("dotenv"), 1);
-import_dotenv.default.config();
+var import_fs = __toESM(require("fs"), 1);
+var originalRequire = import_module.default.prototype.require;
+import_module.default.prototype.require = function(id) {
+  if (id === "canvas") {
+    return {};
+  }
+  return originalRequire.apply(this, arguments);
+};
+var envPaths = [
+  import_path.default.resolve(process.cwd(), ".env"),
+  import_path.default.resolve(__dirname, ".env"),
+  import_path.default.resolve(__dirname, "..", ".env"),
+  import_path.default.resolve(__dirname, "..", "..", ".env")
+];
+for (const envPath of envPaths) {
+  if (import_fs.default.existsSync(envPath)) {
+    import_dotenv.default.config({ path: envPath });
+    console.log(`[Env] Loaded environment variables from: ${envPath}`);
+    break;
+  }
+}
 var app = (0, import_express.default)();
 app.set("trust proxy", 1);
 var PORT = parseInt(process.env.PORT || "3000");
@@ -1146,11 +1167,11 @@ async function startServer() {
   } else {
     const distPath = import_path.default.join(process.cwd(), "dist");
     app.use(import_express.default.static(distPath, { index: false }));
-    const fs = require("fs");
+    const fs2 = require("fs");
     const indexPath = import_path.default.join(distPath, "index.html");
     app.get("*", (req, res) => {
       try {
-        let html = fs.readFileSync(indexPath, "utf8");
+        let html = fs2.readFileSync(indexPath, "utf8");
         const configScript = `
 <script>
   window.FIREBASE_CONFIG = {

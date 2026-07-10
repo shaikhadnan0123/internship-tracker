@@ -9,6 +9,7 @@ import NotificationsView from './components/NotificationsView';
 import ProfileView from './components/ProfileView';
 import LandingPage from './components/LandingPage';
 import TrackerView from './components/TrackerView';
+import GcpFreeTierView from './components/GcpFreeTierView';
 import { motion, AnimatePresence } from 'motion/react';
 import { CheckCircle2, AlertCircle, X, Bell, Building2, ChevronRight, Loader2 } from 'lucide-react';
 import { auth, db, secureFetch } from './firebase';
@@ -858,6 +859,12 @@ export default function App() {
                   connectionsCount={activeConnectionsCount}
                   onLogout={handleLogout}
                 />
+              </div>
+            )}
+
+            {activeView === 'gcp' && (
+              <div id="ln-gcp-view">
+                <GcpFreeTierView />
               </div>
             )}
           </motion.div>

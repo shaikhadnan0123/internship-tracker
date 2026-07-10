@@ -1209,7 +1209,7 @@ async function startServer() {
   });
 }
 
-if (!process.env.FIREBASE_CONFIG && !process.env.FUNCTIONS_EMULATOR) {
+if (process.env.K_SERVICE || (!process.env.FIREBASE_CONFIG && !process.env.FUNCTIONS_EMULATOR)) {
   startServer();
 }
 

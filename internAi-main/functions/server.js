@@ -92,6 +92,13 @@ async function verifyFirebaseToken(req, res, next) {
   if (!req.path.startsWith("/api/")) {
     return next();
   }
+  if (req.path === "/api/benchmark" || req.path === "/api/benchmark/run") {
+    console.info(`[Auth Bypass] Allowing public access to benchmark endpoint: ${req.path}`);
+    req.userId = "demo_user";
+    req.userEmail = "demo@example.com";
+    req.headers["x-user-id"] = "demo_user";
+    return next();
+  }
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     console.warn(`[Security Warning] Unauthenticated access attempt to ${req.method} ${req.path} from IP ${req.ip}`);
@@ -1147,7 +1154,7 @@ async function startServer() {
     console.log(`Server running on http://localhost:${PORT} in ${process.env.NODE_ENV || "development"} mode.`);
   });
 }
-if (!process.env.FIREBASE_CONFIG && !process.env.FUNCTIONS_EMULATOR) {
+if (process.env.K_SERVICE || !process.env.FIREBASE_CONFIG && !process.env.FUNCTIONS_EMULATOR) {
   startServer();
 }
 // Annotate the CommonJS export names for ESM import in node:

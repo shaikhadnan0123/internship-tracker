@@ -35,7 +35,7 @@ const app = express();
 app.set('trust proxy', 1);
 
 const PORT = parseInt(process.env.PORT || "3000");
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "MY_GEMINI_API_KEY";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY || "MY_GEMINI_API_KEY";
 
 app.use(express.json({ limit: "10mb" }));
 
@@ -176,10 +176,11 @@ app.use(verifyFirebaseToken);
 // Lazy-initialize Gemini AI client
 let aiClient: GoogleGenAI | null = null;
 const isXaiKey = !!GEMINI_API_KEY && GEMINI_API_KEY.startsWith("xai-");
+const isGroqKey = !!GEMINI_API_KEY && GEMINI_API_KEY.startsWith("gsk_");
 const isApiKeyAvailable = !!GEMINI_API_KEY && GEMINI_API_KEY !== "MY_GEMINI_API_KEY";
 
 function getAiClient(): GoogleGenAI | null {
-  if (!isApiKeyAvailable || isXaiKey) {
+  if (!isApiKeyAvailable || isXaiKey || isGroqKey) {
     return null;
   }
   if (!aiClient) {
@@ -248,6 +249,32 @@ async function generateAiContent(options: {
     }
 
     return text || JSON.stringify(data);
+  } else if (isGroqKey) {
+    // Call Groq chat completion API (OpenAI-compatible)
+    const model = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          { role: "user", content: options.prompt }
+        ],
+        temperature: 0.1,
+        response_format: options.jsonMode ? { type: "json_object" } : undefined
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Groq API returned status ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json() as any;
+    return data.choices?.[0]?.message?.content || "";
   } else {
     // Call Google GenAI API
     const client = getAiClient();

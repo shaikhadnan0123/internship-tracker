@@ -61,7 +61,7 @@ for (const envPath of envPaths) {
 var app = (0, import_express.default)();
 app.set("trust proxy", 1);
 var PORT = parseInt(process.env.PORT || "3000");
-var GEMINI_API_KEY = process.env.GEMINI_API_KEY || "MY_GEMINI_API_KEY";
+var GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY || "MY_GEMINI_API_KEY";
 app.use(import_express.default.json({ limit: "10mb" }));
 app.use((req, res, next) => {
   res.setHeader("X-Frame-Options", "DENY");
@@ -162,9 +162,10 @@ async function verifyFirebaseToken(req, res, next) {
 app.use(verifyFirebaseToken);
 var aiClient = null;
 var isXaiKey = !!GEMINI_API_KEY && GEMINI_API_KEY.startsWith("xai-");
+var isGroqKey = !!GEMINI_API_KEY && GEMINI_API_KEY.startsWith("gsk_");
 var isApiKeyAvailable = !!GEMINI_API_KEY && GEMINI_API_KEY !== "MY_GEMINI_API_KEY";
 function getAiClient() {
-  if (!isApiKeyAvailable || isXaiKey) {
+  if (!isApiKeyAvailable || isXaiKey || isGroqKey) {
     return null;
   }
   if (!aiClient) {
@@ -219,6 +220,29 @@ async function generateAiContent(options) {
       text = data.choices[0].message.content;
     }
     return text || JSON.stringify(data);
+  } else if (isGroqKey) {
+    const model = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "user", content: options.prompt }
+        ],
+        temperature: 0.1,
+        response_format: options.jsonMode ? { type: "json_object" } : void 0
+      })
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Groq API returned status ${response.status}: ${errText}`);
+    }
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || "";
   } else {
     const client = getAiClient();
     if (!client) {

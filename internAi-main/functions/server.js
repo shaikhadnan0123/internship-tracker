@@ -1145,7 +1145,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = import_path.default.join(process.cwd(), "dist");
-    app.use(import_express.default.static(distPath));
+    app.use(import_express.default.static(distPath, { index: false }));
     const fs = require("fs");
     const indexPath = import_path.default.join(distPath, "index.html");
     app.get("*", (req, res) => {

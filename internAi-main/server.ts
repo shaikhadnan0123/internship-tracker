@@ -175,10 +175,11 @@ app.use(verifyFirebaseToken);
 
 // Lazy-initialize Gemini AI client
 let aiClient: GoogleGenAI | null = null;
+const isXaiKey = !!GEMINI_API_KEY && GEMINI_API_KEY.startsWith("xai-");
 const isApiKeyAvailable = !!GEMINI_API_KEY && GEMINI_API_KEY !== "MY_GEMINI_API_KEY";
 
 function getAiClient(): GoogleGenAI | null {
-  if (!isApiKeyAvailable) {
+  if (!isApiKeyAvailable || isXaiKey) {
     return null;
   }
   if (!aiClient) {
@@ -192,6 +193,77 @@ function getAiClient(): GoogleGenAI | null {
     });
   }
   return aiClient;
+}
+
+async function generateAiContent(options: {
+  prompt: string;
+  jsonMode?: boolean;
+  schema?: any;
+}): Promise<string> {
+  const apiKey = GEMINI_API_KEY;
+  if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
+    throw new Error("No API key provided");
+  }
+
+  if (isXaiKey) {
+    // Call xAI Grok API (OpenAI-compatible)
+    const response = await fetch("https://api.x.ai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: "grok-beta",
+        messages: [
+          { role: "user", content: options.prompt }
+        ],
+        temperature: 0.1,
+        response_format: options.jsonMode ? { type: "json_object" } : undefined
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`xAI API returned status ${response.status}: ${errText}`);
+    }
+
+    const data = await response.json() as any;
+    return data.choices?.[0]?.message?.content || "";
+  } else {
+    // Call Google GenAI API
+    const client = getAiClient();
+    if (!client) {
+      throw new Error("Google GenAI client could not be initialized");
+    }
+
+    const configObj: any = {
+      temperature: 0.1
+    };
+    if (options.jsonMode) {
+      configObj.responseMimeType = "application/json";
+      if (options.schema) {
+        configObj.responseSchema = options.schema;
+      }
+    }
+
+    try {
+      const response = await client.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: options.prompt,
+        config: configObj
+      });
+      return response.text || "";
+    } catch (proError: any) {
+      console.warn("Failed with gemini-2.5-flash, falling back to gemini-1.5-flash:", proError.message || proError);
+      const response = await client.models.generateContent({
+        model: "gemini-1.5-flash",
+        contents: options.prompt,
+        config: configObj
+      });
+      return response.text || "";
+    }
+  }
 }
 
 // --- RESUME PDF/WORD EXTRACTION & CLEANING HELPERS ---
@@ -488,37 +560,17 @@ app.post("/api/ai/post-assistant", async (req, res) => {
     return res.status(400).json({ error: "Invalid tone parameter." });
   }
 
-  const client = getAiClient();
-  if (!client) {
+  if (!isApiKeyAvailable) {
     return res.json({ draft: getOfflineFallbackPost(prompt, tone) });
   }
 
   try {
     const fullPrompt = `Write a LinkedIn post about: "${prompt}".\n      The tone should be: "${tone}".\n      Keep it professional, engaging, scannable, and include 3 relevant hashtags. Ensure it sounds natural and authentic. Limit the post to 150-200 words. Do not use markdown backticks in the response.`;
 
-    const configObj = { temperature: 0.1 };
-    
-    let responseTextStr = "";
-    try {
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: fullPrompt,
-        config: configObj
-      });
-      responseTextStr = response.text || "";
-    } catch (proError: any) {
-      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
-      const response = await client.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: fullPrompt,
-        config: configObj
-      });
-      responseTextStr = response.text || "";
-    }
-
+    const responseTextStr = await generateAiContent({ prompt: fullPrompt });
     res.json({ draft: responseTextStr });
   } catch (error: any) {
-    console.warn("Gemini API error (falling back to offline helper):", error.message || error);
+    console.warn("AI API post-assistant error (falling back to offline helper):", error.message || error);
     res.json({ draft: getOfflineFallbackPost(prompt, tone) });
   }
 });
@@ -537,8 +589,7 @@ app.post("/api/ai/chat-response", async (req, res) => {
     return res.status(400).json({ error: "Invalid partner headline." });
   }
 
-  const client = getAiClient();
-  if (!client) {
+  if (!isApiKeyAvailable) {
     return res.json({ response: getOfflineFallbackChat(messages, partnerName) });
   }
 
@@ -549,29 +600,10 @@ app.post("/api/ai/chat-response", async (req, res) => {
 
     const prompt = `You are ${partnerName}, working as "${partnerHeadline}".\n    Generate a short, professional, conversational chat reply to the user.\n    Here is the recent conversation history:\n    ${conversationHistory}\n    \n    Guidelines:\n    - Respond strictly as ${partnerName}.\n    - Keep the reply conversational, encouraging, and natural for an instant messenger (1-3 sentences max).\n    - Do not include system text or label the response like "${partnerName}:" in the output. Just output the reply.`;
 
-    const configObj = { temperature: 0.1 };
-    
-    let responseTextStr = "";
-    try {
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseTextStr = response.text?.trim() || "";
-    } catch (proError: any) {
-      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
-      const response = await client.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseTextStr = response.text?.trim() || "";
-    }
-
-    res.json({ response: responseTextStr });
+    const responseTextStr = await generateAiContent({ prompt });
+    res.json({ response: responseTextStr.trim() });
   } catch (error: any) {
-    console.warn("Gemini API chat error (falling back to offline helper):", error.message || error);
+    console.warn("AI API chat error (falling back to offline helper):", error.message || error);
     res.json({ response: getOfflineFallbackChat(messages, partnerName) });
   }
 });
@@ -587,37 +619,17 @@ app.post("/api/ai/cover-letter", async (req, res) => {
     return res.status(400).json({ error: "Job description must be a string under 5000 characters." });
   }
 
-  const client = getAiClient();
-  if (!client) {
+  if (!isApiKeyAvailable) {
     return res.json({ coverLetter: getOfflineFallbackCoverLetter(jobTitle, company, jobDescription, profile) });
   }
 
   try {
     const prompt = `Write a polished, professional, and personalized Cover Letter for a job application.\n    \n    Job Details:\n    - Title: ${jobTitle}\n    - Company: ${company}\n    - Description: ${jobDescription || "N/A"}\n    \n    Applicant Profile:\n    - Name: ${profile?.name || "Applicant"}\n    - Headline: ${profile?.headline || "Professional"}\n    - About: ${profile?.about || "N/A"}\n    - Skills: ${profile?.skills?.join(", ") || "N/A"}\n    - Experience: ${JSON.stringify(profile?.experience || [])}\n    \n    Formatting Guidelines:\n    - Return a clean, professional letter layout.\n    - Tailor the letter to match how the applicant's experience and skills solve the job requirements.\n    - Limit the word count to 250-300 words.\n    - Do not use markdown backticks or system codes in the response.`;
 
-    const configObj = { temperature: 0.1 };
-    
-    let responseTextStr = "";
-    try {
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseTextStr = response.text || "";
-    } catch (proError: any) {
-      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
-      const response = await client.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseTextStr = response.text || "";
-    }
-
+    const responseTextStr = await generateAiContent({ prompt });
     res.json({ coverLetter: responseTextStr });
   } catch (error: any) {
-    console.warn("Gemini API cover letter error (falling back to offline helper):", error.message || error);
+    console.warn("AI API cover letter error (falling back to offline helper):", error.message || error);
     res.json({ coverLetter: getOfflineFallbackCoverLetter(jobTitle, company, jobDescription, profile) });
   }
 });
@@ -629,41 +641,22 @@ app.post("/api/ai/optimize-profile", async (req, res) => {
     return res.status(400).json({ error: "Invalid profile data. Must be a valid object." });
   }
 
-  const client = getAiClient();
-  if (!client) {
+  if (!isApiKeyAvailable) {
     return res.json({ suggestions: getOfflineFallbackSuggestions(profile) });
   }
 
   try {
     const prompt = `You are a world-class professional career coach and LinkedIn profile optimizer.\n    Analyze the following applicant profile and provide targeted, constructive, high-impact suggestions for each section:\n    \n    Profile Details:\n    - Name: ${profile.name}\n    - Headline: ${profile.headline}\n    - About: ${profile.about}\n    - Skills: ${profile.skills?.join(", ")}\n    - Experience: ${JSON.stringify(profile.experience)}\n    \n    Provide your output in a structured JSON object with exactly these four keys:\n    - "headline": (A specific headline recommendation with explanation)\n    - "about": (An optimized brief summary or tips to restructure the about section)\n    - "experience": (Advice on how to write impact-focused experience descriptions)\n    - "skills": (Recommendations on key in-demand skills to add based on their background)\n    \n    Ensure suggestions are highly actionable, specific to their background, and supportive. Use professional, clear language. Do not output anything other than raw, valid JSON.`;
 
-    const configObj = {
-      responseMimeType: "application/json",
-      temperature: 0.1
-    };
-
-    let responseTextStr = "";
-    try {
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseTextStr = response.text || "{}";
-    } catch (proError: any) {
-      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
-      const response = await client.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseTextStr = response.text || "{}";
-    }
+    const responseTextStr = await generateAiContent({
+      prompt,
+      jsonMode: true
+    });
 
     const parsed = JSON.parse(responseTextStr);
     res.json({ suggestions: parsed });
   } catch (error: any) {
-    console.warn("Gemini API profile optimization error (falling back to offline helper):", error.message || error);
+    console.warn("AI API profile optimization error (falling back to offline helper):", error.message || error);
     res.json({ suggestions: getOfflineFallbackSuggestions(profile) });
   }
 });
@@ -675,37 +668,17 @@ app.post("/api/ai/resume-question", async (req, res) => {
     return res.status(400).json({ error: "Invalid parameters. Resume text and question must be strings within length limits." });
   }
 
-  const client = getAiClient();
-  if (!client) {
+  if (!isApiKeyAvailable) {
     return res.json({ answer: getOfflineFallbackQuestion(resumeText, question) });
   }
 
   try {
     const prompt = `You are an expert HR Specialist, Senior Technical Recruiter, and Career Coach.\n    \n    Analyze the following resume/CV text:\n    ---\n    ${resumeText}\n    ---\n    \n    Answer the user's specific question: "${question}".\n    \n    Guidelines:\n    - Provide a practical, concrete, and highly actionable response tailored specifically to the skills and experiences present in the resume.\n    - Write in an encouraging, expert professional tone.\n    - Organize your response using clean formatting (bullet points, numbered lists, sub-headers) so it is highly readable and professional.\n    - Do not use markdown backticks or block code blocks. Keep the response around 150-250 words.`;
 
-    const configObj = { temperature: 0.1 };
-
-    let responseTextStr = "";
-    try {
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseTextStr = response.text || "";
-    } catch (proError: any) {
-      console.warn("Failed with pro, falling back to flash:", proError.message || proError);
-      const response = await client.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseTextStr = response.text || "";
-    }
-
+    const responseTextStr = await generateAiContent({ prompt });
     res.json({ answer: responseTextStr });
   } catch (error: any) {
-    console.warn("Gemini API resume question error (falling back to offline helper):", error.message || error);
+    console.warn("AI API resume question error (falling back to offline helper):", error.message || error);
     res.json({ answer: getOfflineFallbackQuestion(resumeText, question) });
   }
 });
@@ -758,8 +731,7 @@ app.post("/api/ai/parse-resume", async (req, res) => {
       });
     }
 
-    const client = getAiClient();
-    if (!client) {
+    if (!isApiKeyAvailable) {
       return res.json({
         text: cleanedText,
         parsedProfile: getOfflineFallbackParsedProfile(cleanedText, safeFileName)
@@ -805,147 +777,71 @@ STRICT INSTRUCTIONS:
 
     let parsedProfile;
     try {
-      let responseText = "";
-      try {
-        const response = await client.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            temperature: 0.1,
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING },
-                email: { type: Type.STRING },
-                phone: { type: Type.STRING },
-                location: { type: Type.STRING },
-                headline: { type: Type.STRING },
-                about: { type: Type.STRING },
-                skills: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
+      const responseText = await generateAiContent({
+        prompt,
+        jsonMode: true,
+        schema: {
+          type: Type.OBJECT,
+          properties: {
+            name: { type: Type.STRING },
+            email: { type: Type.STRING },
+            phone: { type: Type.STRING },
+            location: { type: Type.STRING },
+            headline: { type: Type.STRING },
+            about: { type: Type.STRING },
+            skills: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
+            },
+            experience: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  company: { type: Type.STRING },
+                  role: { type: Type.STRING },
+                  duration: { type: Type.STRING },
+                  description: { type: Type.STRING }
                 },
-                experience: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      company: { type: Type.STRING },
-                      role: { type: Type.STRING },
-                      duration: { type: Type.STRING },
-                      description: { type: Type.STRING }
-                    },
-                    required: ["company", "role"]
-                  }
+                required: ["company", "role"]
+              }
+            },
+            education: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  school: { type: Type.STRING },
+                  degree: { type: Type.STRING },
+                  duration: { type: Type.STRING }
                 },
-                education: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      school: { type: Type.STRING },
-                      degree: { type: Type.STRING },
-                      duration: { type: Type.STRING }
-                    },
-                    required: ["school"]
-                  }
+                required: ["school"]
+              }
+            },
+            projects: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  duration: { type: Type.STRING }
                 },
-                projects: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      title: { type: Type.STRING },
-                      description: { type: Type.STRING },
-                      duration: { type: Type.STRING }
-                    },
-                    required: ["title"]
-                  }
-                },
-                certifications: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                }
-              },
-              required: ["name", "skills"]
+                required: ["title"]
+              }
+            },
+            certifications: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING }
             }
-          }
-        });
-        responseText = response.text || "";
-      } catch (proError: any) {
-        console.warn("Failed to generate with gemini-2.5-flash, falling back to gemini-1.5-flash:", proError.message || proError);
-        const response = await client.models.generateContent({
-          model: "gemini-1.5-flash",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            temperature: 0.1,
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                name: { type: Type.STRING },
-                email: { type: Type.STRING },
-                phone: { type: Type.STRING },
-                location: { type: Type.STRING },
-                headline: { type: Type.STRING },
-                about: { type: Type.STRING },
-                skills: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                },
-                experience: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      company: { type: Type.STRING },
-                      role: { type: Type.STRING },
-                      duration: { type: Type.STRING },
-                      description: { type: Type.STRING }
-                    },
-                    required: ["company", "role"]
-                  }
-                },
-                education: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      school: { type: Type.STRING },
-                      degree: { type: Type.STRING },
-                      duration: { type: Type.STRING }
-                    },
-                    required: ["school"]
-                  }
-                },
-                projects: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      title: { type: Type.STRING },
-                      description: { type: Type.STRING },
-                      duration: { type: Type.STRING }
-                    },
-                    required: ["title"]
-                  }
-                },
-                certifications: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                }
-              },
-              required: ["name", "skills"]
-            }
-          }
-        });
-        responseText = response.text || "";
-      }
+          },
+          required: ["name", "skills"]
+        }
+      });
 
       parsedProfile = JSON.parse(responseText || "{}");
     } catch (apiOrJsonError: any) {
-      console.warn("Gemini API resume parsing error (falling back to offline parsed profile):", apiOrJsonError.message || apiOrJsonError);
+      console.warn("AI API resume parsing error (falling back to offline parsed profile):", apiOrJsonError.message || apiOrJsonError);
       parsedProfile = getOfflineFallbackParsedProfile(cleanedText, safeFileName);
     }
 
@@ -966,8 +862,7 @@ app.post("/api/ai/resume-internships", async (req, res) => {
     return res.status(400).json({ error: "Invalid resume text. Must be a string under 50000 characters." });
   }
 
-  const client = getAiClient();
-  if (!client) {
+  if (!isApiKeyAvailable) {
     return res.json({ recommendations: getOfflineFallbackInternships(resumeText) });
   }
 
@@ -989,10 +884,10 @@ app.post("/api/ai/resume-internships", async (req, res) => {
     
     Format the response strictly as raw JSON matching the schema. Do not wrap the JSON in backticks or code block indicators.`;
 
-    const configObj = {
-      responseMimeType: "application/json",
-      temperature: 0.1,
-      responseSchema: {
+    const responseText = await generateAiContent({
+      prompt,
+      jsonMode: true,
+      schema: {
         type: Type.ARRAY,
         items: {
           type: Type.OBJECT,
@@ -1009,30 +904,12 @@ app.post("/api/ai/resume-internships", async (req, res) => {
           required: ["roleTitle", "company", "suitabilityScore", "matchReason", "skillsToShowcase"]
         }
       }
-    };
-
-    let responseText = "";
-    try {
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseText = response.text || "[]";
-    } catch (proError: any) {
-      console.warn("Failed to generate internships with gemini-2.5-flash, falling back to gemini-1.5-flash:", proError.message || proError);
-      const response = await client.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseText = response.text || "[]";
-    }
+    });
 
     const parsed = JSON.parse(responseText);
     res.json({ recommendations: parsed });
   } catch (error: any) {
-    console.warn("Gemini API internship matching error (falling back to offline helper):", error.message || error);
+    console.warn("AI API internship matching error (falling back to offline helper):", error.message || error);
     res.json({ recommendations: getOfflineFallbackInternships(resumeText) });
   }
 });
@@ -1044,8 +921,7 @@ app.post("/api/ai/resume-analysis", async (req, res) => {
     return res.status(400).json({ error: "Invalid resume text. Must be a string under 50000 characters." });
   }
 
-  const client = getAiClient();
-  if (!client) {
+  if (!isApiKeyAvailable) {
     return res.json({ analysis: getOfflineFallbackAnalysis(resumeText) });
   }
 
@@ -1098,10 +974,10 @@ app.post("/api/ai/resume-analysis", async (req, res) => {
     
     Do not include markdown backticks or formatting outside the JSON object. Just return raw JSON.`;
 
-    const configObj = {
-      responseMimeType: "application/json",
-      temperature: 0.1,
-      responseSchema: {
+    const responseText = await generateAiContent({
+      prompt,
+      jsonMode: true,
+      schema: {
         type: Type.OBJECT,
         properties: {
           overallScore: { type: Type.INTEGER },
@@ -1134,30 +1010,12 @@ app.post("/api/ai/resume-analysis", async (req, res) => {
         },
         required: ["overallScore", "summary", "industryVibe", "categories", "strengths", "improvements", "suggestedRoles"]
       }
-    };
-
-    let responseText = "";
-    try {
-      const response = await client.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseText = response.text || "{}";
-    } catch (proError: any) {
-      console.warn("Failed to generate analysis with gemini-2.5-flash, falling back to gemini-1.5-flash:", proError.message || proError);
-      const response = await client.models.generateContent({
-        model: "gemini-1.5-flash",
-        contents: prompt,
-        config: configObj
-      });
-      responseText = response.text || "{}";
-    }
+    });
 
     const parsed = JSON.parse(responseText);
     res.json({ analysis: parsed });
   } catch (error: any) {
-    console.warn("Gemini API resume analysis error (falling back to offline helper):", error.message || error);
+    console.warn("AI API resume analysis error (falling back to offline helper):", error.message || error);
     res.json({ analysis: getOfflineFallbackAnalysis(resumeText) });
   }
 });
